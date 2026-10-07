@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Codex launcher.  Usage: bin/cx [local|dryrun] [codex args...]
+set -euo pipefail
+REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+[ -f "$REPO/.env" ] && { set -a; . "$REPO/.env"; set +a; }
+
+target="local"
+case "${1:-}" in local|dryrun) target="$1"; shift ;; esac
+
+# Isolated Codex home: no personal ChatGPT auth, history or memories leak in.
+export CODEX_HOME="$REPO/.codex-home"
+mkdir -p "$CODEX_HOME"
+cp "$REPO"/codex/*.toml "$CODEX_HOME/"
+
+overrides=(-c "model_providers.local.base_url=\"$LOCAL_BASE_URL\"")
+if [ "$target" = dryrun ]; then
+  overrides+=(-p dryrun -c "model=\"$DRYRUN_MODEL\"")
+else
+  overrides+=(-p local -c "model=\"$LOCAL_MODEL\"")
+fi
+exec codex "${overrides[@]}" "$@"

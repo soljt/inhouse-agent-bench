@@ -1,0 +1,24 @@
+# Codex config for the self-hosted model. bin/cx copies this into an isolated
+# CODEX_HOME, so it never touches your personal ~/.codex (or its ChatGPT login).
+# Codex dropped wire_api = "chat"; both providers use the Responses API.
+# Per-target settings live in <profile>.config.toml next to this file.
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+check_for_update_on_startup = false
+web_search = "disabled"
+
+[analytics]
+enabled = false
+
+[model_providers.local]
+name = "private vLLM"
+base_url = "http://localhost:8000/v1"  # overridden by LOCAL_BASE_URL in bin/cx
+env_key = "LOCAL_API_KEY"
+wire_api = "responses"
+
+[model_providers.dryrun]
+name = "OpenAI dry run"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"

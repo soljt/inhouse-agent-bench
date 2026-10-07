@@ -1,0 +1,63 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "enabled_providers": [
+    "local",
+    "dryrun"
+  ],
+  "model": "local/{env:LOCAL_MODEL}",
+  "small_model": "local/{env:LOCAL_MODEL}",
+  "share": "disabled",
+  "autoupdate": false,
+  "provider": {
+    "local": {
+      "name": "private vLLM",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "{env:LOCAL_BASE_URL}",
+        "apiKey": "{env:LOCAL_API_KEY}"
+      },
+      "models": {
+        "{env:LOCAL_MODEL}": {
+          "name": "Self-hosted model",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 16384
+          }
+        }
+      }
+    },
+    "dryrun": {
+      "name": "OpenAI dry run",
+      "npm": "@ai-sdk/openai",
+      "options": {
+        "baseURL": "https://api.openai.com/v1",
+        "apiKey": "{env:OPENAI_API_KEY}"
+      },
+      "models": {
+        "{env:DRYRUN_MODEL}": {
+          "name": "OpenAI dry-run model",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 16384
+          }
+        }
+      }
+    }
+  },
+  "permission": {
+    "edit": "ask",
+    "webfetch": "ask",
+    "websearch": "deny",
+    "external_directory": "ask",
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "ls*": "allow",
+      "pwd": "allow"
+    }
+  }
+}

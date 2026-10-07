@@ -1,0 +1,3 @@
+model_provider = "local"
+model = "qwen3.8-27b"  # overridden by LOCAL_MODEL in bin/cx
+model_context_window = 131072
