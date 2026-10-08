@@ -1,3 +1,4 @@
 sol/
 .env
 .codex-home/
+__pycache__/
