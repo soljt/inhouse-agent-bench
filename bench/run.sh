@@ -68,6 +68,7 @@ fi
 { echo "task=$task"; echo "harness=$harness"; echo "target=$target"; echo "model=$model"
   echo "base_tag=$BASE_TAG"; echo "workspace=$WS"; echo "start=$(date -Is)"
   for kv in ${BENCH_META:-}; do echo "$kv"; done; } > "$RUN/meta.txt"
+[ "${BENCH_YOLO:-0}" = 1 ] && echo "yolo=1" >> "$RUN/meta.txt"
 
 # Scripted tasks (a turns/ folder) run without a TUI: follow-ups are sent in the same session, see entrypoint.sh
 tty=(-it); scripted=()
@@ -86,7 +87,7 @@ docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]
   -e HARNESS="$harness" -e PROMPT_FILE=/run/prompt.md \
   -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e MODEL="$model" \
   -e LOCAL_BASE_URL="$base_url" -e LOCAL_API_KEY -e LOCAL_MODEL \
-  -e OPENAI_API_KEY -e DRYRUN_MODEL "${proxy_env[@]}" \
+  -e OPENAI_API_KEY -e DRYRUN_MODEL -e BENCH_YOLO "${proxy_env[@]}" \
   llm-bench; }
 if [ ${#tty[@]} -eq 0 ]; then docker_run 2>&1 | tee "$RUN/console.log" || true; else docker_run || true; fi
 

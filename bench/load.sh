@@ -68,4 +68,4 @@ for level in "${levels[@]}"; do
   fails=0; for p in "${pids[@]}"; do wait "$p" || fails=$((fails + 1)); done
   echo "== level $level done ($(date +%T)), $fails launcher errors"
 done
-python3 "$BENCH/report.py" --load "$group"
+python3 "$BENCH/report.py" --load "$group" --out "$logs"

@@ -5,6 +5,7 @@
 # Scripted mode (TURNS_IN set): no TUI. The prompt is turn 1, then each TURNS_IN/NN.md is sent as a follow-up
 # in the same session, with all permissions auto-approved (the container is the sandbox). After every turn the
 # workspace diff and the agent's last message go to TURNS_OUT/NN.diff and NN.last.md.
+# BENCH_YOLO=1: the interactive TUI is auto-approved too (Codex also skips its own sandbox).
 set -euo pipefail
 for d in /work/the app/angular /work/the app/TypeScript; do
   [ -d "$d/node_modules/." ] || { echo "$d/node_modules missing: run bench/setup-deps.sh on the host" >&2; exit 2; }
@@ -46,10 +47,12 @@ fi
 case "$HARNESS" in
   oc)
     export OPENCODE_CONFIG=/harness/opencode/opencode.json
-    exec opencode -m "$MODEL_REF" --prompt "$prompt" ;;
+    yolo=(); [ "${BENCH_YOLO:-0}" = 1 ] && yolo=(--auto)
+    exec opencode "${yolo[@]}" -m "$MODEL_REF" --prompt "$prompt" ;;
   cx)
     export CODEX_HOME="$HOME/.codex"; mkdir -p "$CODEX_HOME"; cp /harness/codex/*.toml "$CODEX_HOME/"
-    exec codex -p "$PROFILE" -c "model=\"$MODEL\"" \
+    yolo=(); [ "${BENCH_YOLO:-0}" = 1 ] && yolo=(--dangerously-bypass-approvals-and-sandbox)
+    exec codex -p "$PROFILE" "${yolo[@]}" -c "model=\"$MODEL\"" \
       -c "model_providers.local.base_url=\"$LOCAL_BASE_URL\"" "$prompt" ;;
   *) echo "HARNESS must be oc or cx" >&2; exit 2 ;;
 esac
