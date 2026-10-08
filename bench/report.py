@@ -158,9 +158,10 @@ def main(argv):
                              fmt([r['auto_subtotal'] for r in rs]), fmt([r['wall_min'] for r in rs if r['wall_min'] is not None]),
                              fmt([x['request_s_mean'] for x in tel if x.get('request_s_mean') is not None]),
                              fmt([x['output_tps'] for x in tel if x.get('output_tps') is not None]),
-                             f'{agg:.0f}', sum(1 for x in tel if x.get('unbacked_claim'))])
+                             f'{agg:.0f}', sum(1 for x in tel if x.get('unbacked_claim')),
+                             sum(1 for r in rs if r.get('timed_out'))])
             md.append(table(['agents', 'gates', 'auto /12', 'wall min', 's per request', 'out tok/s per agent',
-                             'aggregate out tok/s', 'unbacked claims'], rows))
+                             'aggregate out tok/s', 'unbacked claims', 'timed out'], rows))
             md.append('')
 
     pend = [s for s in scores if not s['complete']]

@@ -88,7 +88,7 @@ def score(run_dir):
         'run': os.path.basename(os.path.abspath(run_dir)), 'task': task,
         'harness': m.get('harness'), 'target': m.get('target'), 'model': m.get('model'),
         'start': m.get('start'), 'end': m.get('end'), 'wall_min': wall,
-        'scripted': m.get('scripted') == '1', 'load_group': m.get('load_group'),
+        'scripted': m.get('scripted') == '1', 'timed_out': m.get('timed_out') == '1', 'load_group': m.get('load_group'),
         'load_level': int(m['load_level']) if m.get('load_level') else None,
         'gate': gate, 'dims': dims, 'total': total, 'subtotal_known': known, 'pending': pending,
         'rules_broken': broken,
