@@ -78,4 +78,6 @@ docker run --rm -it --name "bench-$task-$$" "${RUN_NET[@]}" \
 echo "end=$(date -Is)" >> "$RUN/meta.txt"
 [ -n "$registry_pid" ] && kill "$registry_pid" 2>/dev/null
 "$TASK/grade.sh" "$RUN/grade" "$WS" ${GRADE_WITH_NG:+--with-ng} || true
+python3 "$BENCH/score.py" "$RUN" || true
 echo "Run saved in $RUN. Transcript: $RUN/home (OpenCode: .local/share/opencode, Codex: .codex/sessions)"
+echo "Grade it: bench/review.py $RUN   (or later: bench/review.py next)"
