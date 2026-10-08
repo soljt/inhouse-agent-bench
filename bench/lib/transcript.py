@@ -1,4 +1,5 @@
 """Read a run's transcript (OpenCode SQLite or Codex rollout JSONL) into telemetry, commands and the final message."""
+import datetime
 import glob
 import json
 import os
@@ -15,7 +16,7 @@ EXIT = re.compile(r'Process exited with code (\d+)')
 
 def _empty():
     return dict(harness=None, model_requests=0, input_tokens=0, output_tokens=0, peak_context=0,
-                tool_calls=0, tool_errors=0, nonzero_exits=0, commands=[], final_message='', turn_finals=[])
+                tool_calls=0, tool_errors=0, nonzero_exits=0, commands=[], final_message='', turn_finals=[], request_seconds=[])
 
 
 def _opencode(db_path):
@@ -30,6 +31,9 @@ def _opencode(db_path):
         t['input_tokens'] += tok.get('input', 0)
         t['output_tokens'] += tok.get('output', 0) + tok.get('reasoning', 0)
         t['peak_context'] = max(t['peak_context'], tok.get('input', 0) + (tok.get('cache') or {}).get('read', 0))
+        tm = m.get('time') or {}
+        if tm.get('created') and tm.get('completed'):
+            t['request_seconds'].append((tm['completed'] - tm['created']) / 1000)
     roles = {mid: json.loads(d).get('role') for mid, d in db.execute("select id, data from message")}
     last_text = ''
     for (mid, d) in db.execute("select message_id, data from part order by time_created"):
@@ -59,8 +63,18 @@ def _opencode(db_path):
     return t
 
 
+def _ts(value):
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return None
+
+
 def _codex(files):
     t = _empty(); t['harness'] = 'codex'
+    prev_ts = last_out = None
     for f in sorted(files):
         for line in open(f, encoding='utf-8', errors='replace'):
             try:
@@ -69,6 +83,7 @@ def _codex(files):
                 continue
             p = o.get('payload') or {}
             kind = p.get('type')
+            ts = _ts(o.get('timestamp'))
             if o.get('type') == 'event_msg' and kind == 'token_count' and p.get('info'):
                 last = p['info'].get('last_token_usage') or {}
                 total = p['info'].get('total_token_usage') or {}
@@ -76,7 +91,21 @@ def _codex(files):
                 t['input_tokens'] = total.get('input_tokens', t['input_tokens'])
                 t['output_tokens'] = total.get('output_tokens', t['output_tokens'])
                 t['peak_context'] = max(t['peak_context'], last.get('input_tokens', 0))
-            elif o.get('type') == 'event_msg' and kind == 'task_complete':
+            # A model request runs from the last input (turn start, user message, tool output) to the last
+            # model output item before the next input; tool execution time is not counted
+            is_input = ((o.get('type') == 'event_msg' and kind == 'task_started')
+                        or (o.get('type') == 'response_item' and kind in ('function_call_output', 'custom_tool_call_output'))
+                        or (o.get('type') == 'response_item' and kind == 'message' and p.get('role') in ('user', 'developer')))
+            is_output = (o.get('type') == 'response_item'
+                         and (kind in ('reasoning', 'function_call', 'custom_tool_call', 'local_shell_call')
+                              or (kind == 'message' and p.get('role') == 'assistant')))
+            if ts and is_output:
+                last_out = ts
+            if ts and is_input:
+                if prev_ts and last_out and last_out > prev_ts:
+                    t['request_seconds'].append(last_out - prev_ts)
+                prev_ts, last_out = ts, None
+            if o.get('type') == 'event_msg' and kind == 'task_complete':
                 t['final_message'] = p.get('last_agent_message') or t['final_message']
                 t['turn_finals'].append(p.get('last_agent_message') or '')
             elif o.get('type') == 'response_item' and kind in ('function_call', 'custom_tool_call', 'local_shell_call'):
@@ -98,6 +127,8 @@ def _codex(files):
                     t['nonzero_exits'] += 1
                 if re.match(r'\s*(error|failed to|unknown tool|invalid)', out or '', re.I):
                     t['tool_errors'] += 1
+    if prev_ts and last_out and last_out > prev_ts:
+        t['request_seconds'].append(last_out - prev_ts)
     return t
 
 
@@ -112,6 +143,10 @@ def read(run_dir):
         if not files:
             return None
         t = _codex(files)
+    rs = t.pop('request_seconds')
+    t['request_s_mean'] = round(sum(rs) / len(rs), 2) if rs else None
+    t['request_s_total'] = round(sum(rs), 1) if rs else None
+    t['output_tps'] = round(t['output_tokens'] / sum(rs), 1) if rs and sum(rs) > 0 else None
     t['verify_commands'] = sum(1 for c in t['commands'] if VERIFY_CMD.search(c))
     t['claims_verification'] = bool(CLAIM.search(t['final_message'] or ''))
     t['unbacked_claim'] = t['claims_verification'] and t['verify_commands'] == 0

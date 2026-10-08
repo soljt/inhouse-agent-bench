@@ -9,7 +9,9 @@ WS="${BENCH_WORKSPACE:-$HOME/llm-bench}"; DEPS="${BENCH_DEPS:-$HOME/llm-bench-de
 BRIDGE_IP=172.17.0.1; PROXY_PORT=3128
 harness="$1"; target="$2"; task="$3"
 TASK="$BENCH/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task" >&2; exit 2; }
-set -a; . "$REPO/.env"; . "$TASK/task.env"; set +a
+# BENCH_ENV: another env file (e.g. a second model server); BENCH_RESULTS: another results folder
+set -a; . "${BENCH_ENV:-$REPO/.env}"; . "$TASK/task.env"; set +a
+RESULTS="${BENCH_RESULTS:-$BENCH/results}"
 
 RUN_NET=(--add-host host.docker.internal:host-gateway -v "$DEPS:$DEPS")
 
@@ -49,7 +51,8 @@ fi
 AGENT_HOME=$(docker run --rm --user "$(id -u):$(id -g)" --entrypoint sh llm-bench -c 'getent passwd "$(id -u)" | cut -d: -f6')
 AGENT_HOME="${AGENT_HOME:-/home/agent}"
 
-RUN="$BENCH/results/$task/$harness-$target-${model//\//_}-$(date +%y%m%d_%H%M%S)"
+# BENCH_RUN_SUFFIX keeps concurrent runs (bench/load.sh) that start in the same second apart
+RUN="$RESULTS/$task/$harness-$target-${model//\//_}-$(date +%y%m%d_%H%M%S)${BENCH_RUN_SUFFIX:+-$BENCH_RUN_SUFFIX}"
 mkdir -p "$RUN/home"; cp "$TASK/prompt.md" "$RUN/prompt.md"
 "$BENCH/reset.sh" "$BASE_TAG" "$WS"
 [ -x "$TASK/prepare.sh" ] && "$TASK/prepare.sh" "$WS"
@@ -63,13 +66,16 @@ if [ "${NEEDS_REGISTRY:-0}" = 1 ]; then
   sleep 1
 fi
 { echo "task=$task"; echo "harness=$harness"; echo "target=$target"; echo "model=$model"
-  echo "base_tag=$BASE_TAG"; echo "start=$(date -Is)"; } > "$RUN/meta.txt"
+  echo "base_tag=$BASE_TAG"; echo "workspace=$WS"; echo "start=$(date -Is)"
+  for kv in ${BENCH_META:-}; do echo "$kv"; done; } > "$RUN/meta.txt"
 
 # Scripted tasks (a turns/ folder) run without a TUI: follow-ups are sent in the same session, see entrypoint.sh
 tty=(-it); scripted=()
-if [ -d "$TASK/turns" ]; then
+# BENCH_SCRIPTED=1 runs a single-prompt task the same way, without a TUI (bench/load.sh does this)
+if [ -d "$TASK/turns" ] || [ "${BENCH_SCRIPTED:-0}" = 1 ]; then
+  turns_in="$TASK/turns"; [ -d "$turns_in" ] || { turns_in="$RUN/no-turns"; mkdir -p "$turns_in"; }
   mkdir -p "$RUN/turns"; tty=()
-  scripted=(-v "$TASK/turns:/run/turns-in:ro" -v "$RUN/turns:/run/turns-out" -e TURNS_IN=/run/turns-in -e TURNS_OUT=/run/turns-out)
+  scripted=(-v "$turns_in:/run/turns-in:ro" -v "$RUN/turns:/run/turns-out" -e TURNS_IN=/run/turns-in -e TURNS_OUT=/run/turns-out)
   echo "scripted=1" >> "$RUN/meta.txt"
 fi
 docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]}" "${scripted[@]}" \

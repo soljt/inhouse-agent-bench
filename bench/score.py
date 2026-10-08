@@ -87,12 +87,15 @@ def score(run_dir):
     result = {
         'run': os.path.basename(os.path.abspath(run_dir)), 'task': task,
         'harness': m.get('harness'), 'target': m.get('target'), 'model': m.get('model'),
-        'start': m.get('start'), 'wall_min': wall,
+        'start': m.get('start'), 'end': m.get('end'), 'wall_min': wall,
+        'scripted': m.get('scripted') == '1', 'load_group': m.get('load_group'),
+        'load_level': int(m['load_level']) if m.get('load_level') else None,
         'gate': gate, 'dims': dims, 'total': total, 'subtotal_known': known, 'pending': pending,
         'rules_broken': broken,
         'failure_tag': h.get('failure_tag') or None, 'failure_tag_suggested': tag,
         'intervention': h.get('intervention', ''), 'notes': h.get('notes', ''),
         'complete': total is not None,
+        'auto_subtotal': sum(v['auto'] for v in dims.values() if v['auto'] is not None) if gate['passed'] else 0,
         'telemetry': {k: v for k, v in tel.items() if k not in ('commands', 'final_message', 'turn_finals')},
     }
     os.makedirs(os.path.join(run_dir, 'grade'), exist_ok=True)
