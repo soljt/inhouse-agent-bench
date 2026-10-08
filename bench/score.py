@@ -93,7 +93,7 @@ def score(run_dir):
         'failure_tag': h.get('failure_tag') or None, 'failure_tag_suggested': tag,
         'intervention': h.get('intervention', ''), 'notes': h.get('notes', ''),
         'complete': total is not None,
-        'telemetry': {k: v for k, v in tel.items() if k not in ('commands', 'final_message')},
+        'telemetry': {k: v for k, v in tel.items() if k not in ('commands', 'final_message', 'turn_finals')},
     }
     os.makedirs(os.path.join(run_dir, 'grade'), exist_ok=True)
     json.dump(result, open(os.path.join(run_dir, 'grade', 'score.json'), 'w'), indent=1)

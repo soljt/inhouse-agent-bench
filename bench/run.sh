@@ -65,7 +65,15 @@ fi
 { echo "task=$task"; echo "harness=$harness"; echo "target=$target"; echo "model=$model"
   echo "base_tag=$BASE_TAG"; echo "start=$(date -Is)"; } > "$RUN/meta.txt"
 
-docker run --rm -it --name "bench-$task-$$" "${RUN_NET[@]}" \
+# Scripted tasks (a turns/ folder) run without a TUI: follow-ups are sent in the same session, see entrypoint.sh
+tty=(-it); scripted=()
+if [ -d "$TASK/turns" ]; then
+  mkdir -p "$RUN/turns"; tty=()
+  scripted=(-v "$TASK/turns:/run/turns-in:ro" -v "$RUN/turns:/run/turns-out" -e TURNS_IN=/run/turns-in -e TURNS_OUT=/run/turns-out)
+  echo "scripted=1" >> "$RUN/meta.txt"
+fi
+docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]}" "${scripted[@]}" \
+  -v "$BENCH/container/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro" \
   --user "$(id -u):$(id -g)" -e HOME="$AGENT_HOME" -v "$RUN/home:$AGENT_HOME" \
   -v "$WS:/work" -v "$RUN/prompt.md:/run/prompt.md:ro" -v "$RUN/tomcat:/usr/share/tomcat" \
   -v "$REPO/opencode:/harness/opencode:ro" -v "$REPO/codex:/harness/codex:ro" \
@@ -73,7 +81,8 @@ docker run --rm -it --name "bench-$task-$$" "${RUN_NET[@]}" \
   -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e MODEL="$model" \
   -e LOCAL_BASE_URL="$base_url" -e LOCAL_API_KEY -e LOCAL_MODEL \
   -e OPENAI_API_KEY -e DRYRUN_MODEL "${proxy_env[@]}" \
-  llm-bench || true
+  llm-bench; }
+if [ ${#tty[@]} -eq 0 ]; then docker_run 2>&1 | tee "$RUN/console.log" || true; else docker_run || true; fi
 
 echo "end=$(date -Is)" >> "$RUN/meta.txt"
 [ -n "$registry_pid" ] && kill "$registry_pid" 2>/dev/null

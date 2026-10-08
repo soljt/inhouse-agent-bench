@@ -70,7 +70,7 @@ def _reuse(task, a):
         return 1 + ('D1' in ids) + ('D2' in ids)
     if tid == 't7':
         return 3 if a.get('uses_error_helper') is True else 2
-    if tid == 't8':
+    if tid in ('t8', 't13'):
         return max(0, _misses(a.get('limit_literal_lines', 9) <= 1, a.get('length_check_lines', 9) <= 1,
                               a.get('attribute_name_literals', 9) == 0))
     if tid == 't9':
@@ -114,6 +114,14 @@ def suggest(task, a):
         # A review has no repository rules to break; the procedure is the requested findings format
         broken = ['review_format'] if a.get('defects_unparsed', 0) else []
         procedure = 3 if not broken else 2
+    if tid == 't13':
+        # Asking for the missing limit before editing is the point of the task; a barrage of questions is not
+        if a.get('asked_before_editing') is not True:
+            broken = broken + ['guessed_instead_of_asking']
+            procedure = max(0, procedure - 2)
+        if a.get('turn1_questions', 0) > 3:
+            broken = broken + ['too_many_questions']
+            procedure = max(0, procedure - 1)
     return {
         'correctness': _correctness(task, a),
         'procedure': procedure,

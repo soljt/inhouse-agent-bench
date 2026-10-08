@@ -15,7 +15,7 @@ EXIT = re.compile(r'Process exited with code (\d+)')
 
 def _empty():
     return dict(harness=None, model_requests=0, input_tokens=0, output_tokens=0, peak_context=0,
-                tool_calls=0, tool_errors=0, nonzero_exits=0, commands=[], final_message='')
+                tool_calls=0, tool_errors=0, nonzero_exits=0, commands=[], final_message='', turn_finals=[])
 
 
 def _opencode(db_path):
@@ -30,11 +30,18 @@ def _opencode(db_path):
         t['input_tokens'] += tok.get('input', 0)
         t['output_tokens'] += tok.get('output', 0) + tok.get('reasoning', 0)
         t['peak_context'] = max(t['peak_context'], tok.get('input', 0) + (tok.get('cache') or {}).get('read', 0))
+    roles = {mid: json.loads(d).get('role') for mid, d in db.execute("select id, data from message")}
     last_text = ''
-    for (d,) in db.execute("select data from part order by time_created"):
+    for (mid, d) in db.execute("select message_id, data from part order by time_created"):
         p = json.loads(d)
         if p.get('type') == 'text' and not p.get('synthetic'):
-            last_text = p.get('text', '')
+            if roles.get(mid) == 'user':
+                # A new user turn: close the previous one
+                if t['turn_finals'] or last_text:
+                    t['turn_finals'].append(last_text)
+                last_text = ''
+            else:
+                last_text = p.get('text', '')
         if p.get('type') != 'tool':
             continue
         st = p.get('state') or {}
@@ -47,6 +54,7 @@ def _opencode(db_path):
         cmd = (st.get('input') or {}).get('command')
         if cmd:
             t['commands'].append(cmd)
+    t['turn_finals'].append(last_text)
     t['final_message'] = last_text
     return t
 
@@ -70,6 +78,7 @@ def _codex(files):
                 t['peak_context'] = max(t['peak_context'], last.get('input_tokens', 0))
             elif o.get('type') == 'event_msg' and kind == 'task_complete':
                 t['final_message'] = p.get('last_agent_message') or t['final_message']
+                t['turn_finals'].append(p.get('last_agent_message') or '')
             elif o.get('type') == 'response_item' and kind in ('function_call', 'custom_tool_call', 'local_shell_call'):
                 t['tool_calls'] += 1
                 try:

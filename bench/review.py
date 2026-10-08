@@ -65,7 +65,12 @@ def page(run_dir, blind):
     who = f"run {blind_id(run_dir)}" if blind else f"{s['harness']}/{s['model']}  ({os.path.basename(run_dir)})"
     out = [f"\033[1m{s['task']}  |  {who}\033[0m  wall {s['wall_min']} min"]
     out.append(section('Prompt', read(os.path.join(run_dir, 'prompt.md'))))
-    out.append(section('Agent final message', tel.get('final_message') or '(no transcript found)'))
+    finals = tel.get('turn_finals') or []
+    if len(finals) > 1:
+        for i, f in enumerate(finals, 1):
+            out.append(section(f'Agent final message, turn {i} of {len(finals)}', f or '(empty)'))
+    else:
+        out.append(section('Agent final message', tel.get('final_message') or '(no transcript found)'))
     gate = '  '.join(f"{k}={'ok' if v else 'FAIL'}" for k, v in s['gate'].items() if k != 'passed')
     rows = [f'gate: {gate}', f"rules broken: {', '.join(s['rules_broken']) or 'none'}", '',
             f"{'dimension':<14}{'auto':>6}{'human':>7}"]
