@@ -74,6 +74,44 @@ hidden_junit() {
   rm -rf "$t"
 }
 
+# TypeScript slice: type check over the whole tsconfig. key
+ts_typecheck() {
+  (cd "$WS/the app/TypeScript" && ./node_modules/.bin/tsc --noEmit) > "$OUT/$1.log" 2>&1 && R[$1]=true || R[$1]=false
+}
+
+# Run the TypeScript Jest suite as the agent left it (its own tests included). key
+ts_jest_all() {
+  (cd "$WS/the app/TypeScript" && ./node_modules/.bin/jest --config=jest.config.js --silent) > "$OUT/$1.log" 2>&1 && R[$1]=true || R[$1]=false
+  R[${1}_summary]=$(json_str "$(grep -E '^Tests:' "$OUT/$1.log" | tail -1)")
+}
+
+# Run hidden Jest test files from inside TypeScript/tests (relative imports need that), then remove them. key, files...
+hidden_jest() {
+  local key="$1"; shift; local f names=()
+  for f in "$@"; do cp "$f" "$WS/the app/TypeScript/tests/"; names+=("tests/$(basename "$f")"); done
+  (cd "$WS/the app/TypeScript" && ./node_modules/.bin/jest --config=jest.config.js --silent --verbose "${names[@]}") > "$OUT/$key.log" 2>&1 \
+    && R[$key]=true || R[$key]=false
+  for f in "${names[@]}"; do rm -f "$WS/the app/TypeScript/$f"; done
+  R[${key}_summary]=$(json_str "$(grep -E '^Tests:' "$OUT/$key.log" | tail -1)")
+}
+
+# CRLF files the agent touched must stay CRLF. key, files... (true when none of them was touched)
+crlf_kept_if_touched() {
+  local key="$1"; shift; local f lines crlf ok=true
+  for f in "$@"; do
+    grep -qxF "$f" "$OUT/changed-files.txt" || continue
+    lines=$(wc -l < "$WS/$f"); crlf=$(grep -c $'\r$' "$WS/$f")
+    [ "$lines" = "$crlf" ] || { ok=false; echo "$f" >> "$OUT/$key.txt"; }
+  done
+  R[$key]=$ok
+}
+
+# Count added lines (outside comments) matching a regex in the given files. key, regex, path regex
+count_added() {
+  R[$1]=$(awk -v pr="$3" '/^\+\+\+ /{f=($0 ~ pr)} f && /^\+[^+]/' "$OUT/diff.patch" \
+    | grep -vE '^\+\s*(//|\*|/\*)' | grep -cE "$2")
+}
+
 emit_json() {
   { echo "{"; local first=1 k
     for k in $(printf '%s\n' "${!R[@]}" | sort); do
