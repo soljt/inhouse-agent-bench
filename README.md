@@ -5,14 +5,16 @@ Two things live here:
 1. **Launchers** (`bin/oc`, `bin/cx`) that run OpenCode and Codex CLI against our self-hosted model, or
    against OpenAI for a dry run, with their settings locked down.
 2. **A benchmark** (`bench/`) that runs those harnesses on real coding tasks in an isolated
-   container, grades the result automatically, and helps a human grade the rest.
+   container, grades the result automatically, and helps a human grade the rest. The tasks come from a
+   **task set**, a separate folder you write for your own code base (see Task sets); an example ships in
+   `examples/python-taskset/`.
 
 Shared config for running OpenCode and Codex CLI against our self-hosted model,
 with an OpenAI dry-run target that exercises the same code path.
 
 | Target | Endpoint | Used for |
 | --- | --- | --- |
-| `local` (default) | vLLM via SSH tunnel, `LOCAL_BASE_URL` | The real thing |
+| `local` (default) | vLLM (or any OpenAI-compatible server) via SSH tunnel, `LOCAL_BASE_URL` | The real thing |
 | `dryrun` | `https://api.openai.com/v1` | Testing config, permissions and tooling before the server exists |
 
 OpenCode talks Chat Completions; Codex talks the Responses API (it no longer
@@ -31,22 +33,24 @@ the vLLM adapter; the smoke test covers that.
 | --- | --- |
 | `bin/oc`, `bin/cx` | Launchers for interactive use |
 | `opencode/`, `codex/` | Harness configs, shared by the launchers and the benchmark container |
-| `scripts/` | `setup.sh` (install pinned harnesses), `smoke-test.sh` (tool call on both APIs) |
+| `scripts/` | `setup.sh` (install pinned harnesses), `smoke-test.sh` (tool call on both APIs), `env.sh` (loads `.env`, target names) |
 | `results/` | Model server reports (vLLM startup numbers) |
 | `bench/run.sh`, `bench/load.sh` | One benchmark run; a concurrency load test |
-| `bench/container/` | The `llm-bench` image (Java 17, ant, Maven, Node 20, both harnesses) and its entrypoint |
-| `bench/tasks/<id>/` | One task each: prompt, base tag, hidden tests, grader |
-| `bench/grade.py`, `bench/lib/checks.py` | Grading runner and shared checks |
+| `bench/container/` | The base image (Node 20, both harnesses, git, Python) task set images build on, and the entrypoint |
+| `bench/reset.py` | Resets the workspace to a task's base tag and runs the task set's after-reset hook |
+| `bench/grade.py`, `bench/lib/checks.py` | Grading runner and generic checks |
 | `bench/score.py`, `bench/lib/rubric.py` | Gates and score suggestions from a run's checks |
-| `bench/review.py`, `bench/report.py` | Human review in the browser; comparison report |
+| `bench/lib/taskset.py` | Finds and reads the task set: the contract between the framework and a task set |
+| `bench/review.py`, `bench/report.py`, `bench/regrade.py` | Human review in the browser; comparison report; grading again |
 | `bench/sandbox.py`, `bench/agentnet.py`, `bench/gitguard.py`, `bench/egress-proxy.py` | Isolation (see Security model) |
 | `bench/results/` | Run folders and reports (gitignored) |
+| `examples/python-taskset/` | A small complete task set to try and to copy |
 
 ## Setup
 
 ```bash
 scripts/setup.sh          # installs pinned opencode + codex, creates .env
-$EDITOR .env              # OPENAI_API_KEY (platform key), LOCAL_API_KEY
+$EDITOR .env              # OPENAI_API_KEY (platform key), LOCAL_API_KEY, BENCH_TASKSET
 ```
 
 ## Use
@@ -85,36 +89,55 @@ firewall or container level.
 
 1. **Checks isolation.** The agent network must have no internet and no way to the host's own services; the
    model endpoint must answer through the gateway. The workspace's `.git` must match its baseline (gitguard).
-2. **Resets the workspace** (`~/llm-bench`) to the task's base tag and rebuilds its generated files
-   (`reset.sh`; the builds run in the sandbox). Runs the task's `prepare.sh` if it has one.
-3. **Runs the agent** in the `llm-bench` container with the task prompt, as a TUI or, for scripted tasks,
+2. **Resets the workspace** to the task's base tag and runs the task set's after-reset hook in the sandbox
+   (`reset.py`; for example rebuilding generated files). Runs the task's `prepare.sh` if it has one.
+3. **Runs the agent** in the task set's image with the task prompt, as a TUI or, for scripted tasks,
    unattended (follow-up turns from `turns/`).
 4. **Checks `.git` again**, then **grades** the workspace in a throwaway sandbox (`grade.py` with the task's
    `grade.py`): diff, builds, hidden tests, rule checks. Results go to `<run>/grade/auto.json`.
 5. **Scores** it (`score.py`): gates (builds, behaviour, no harm) and automatic suggestions for the scores
    that need no judgement.
 
-Each run gets a folder `bench/results/<task>/<harness>-<target>-<model>-<time>/` with `meta.txt`, the
-prompt, the agent's home (its transcript), `console.log` for scripted runs, and `grade/`.
+Each run gets a folder `bench/results/<task>/<harness>-<target>-<model>-<time>/` with `meta.txt` (including
+which task set it used), the prompt, the agent's home (its transcript), `console.log` for scripted runs, and
+`grade/`.
+
+### Task sets
+
+The framework knows nothing about your code base; a task set brings it. It is a folder, found through
+`BENCH_TASKSET` (environment or `.env`), with:
+
+```
+taskset.toml        image, workspace (git repo with the tasks' base tags), deps folder (optional, read-only
+                    in containers), where the agent starts, grader module, reset and run folder settings
+tasks/<id>/         prompt.md, task.env (BASE_TAG=<tag>), grade.py, and optionally hidden/ (tests the
+                    agent never sees), turns/ (follow-up prompts: makes the task scripted), prepare.sh
+lib/<module>.py     optional: a Grader subclass with checks for your code base, your rules (RULE_BREAKS)
+                    and build keys (BUILD_KEYS)
+hooks/, container/  whatever its after-reset hook and image need
+```
+
+`bench/lib/taskset.py` documents every key. Task sets in use:
+
+- `examples/python-taskset/`: a tiny Python package with two pytest-graded tasks. Start here: its README
+  shows how to build it, run it, and check its graders without a model.
+- `~/my-taskset` (private repo): 14 tasks on slices of the app and the app's backend, with their
+  workspace tags, image and setup in its README.
 
 ### Prerequisites
 
-- Docker, and the image: `docker build -t llm-bench bench/container` (with `--network host` if the default
-  bridge has no egress).
-- `.env` filled in as for the launchers (see Setup); for `local` the SSH tunnel must be up.
-- The workspace repo `~/llm-bench` with the tasks' base tags (`t1-base`, `v2-base`, `v3-base`, `t11-base`,
-  `t12-review`, `t2-base`). It holds slices of the app and the app's backend at fixed commits. New slices are
-  built in the worktree `~/llm-bench-dev` (branch `tasks`) and tagged there; both share one `.git`.
-- The workspace's node_modules: `bench/setup-deps.sh` (once) installs them into `~/llm-bench-deps` and links
-  them; containers see that folder read-only.
+- Docker, the base image `docker build --network host -t llm-bench-base bench/container`, and the task set's
+  own image (see its README).
+- `.env` filled in as for the launchers (see Setup), with `BENCH_TASKSET`; for `local` the SSH tunnel must be up.
+- The task set's workspace and anything its README asks for (for example a deps install).
 
 ### Running
 
 ```bash
-bench/run.sh cx local e1-word-count       # one run, TUI
-BENCH_YOLO=1 bench/run.sh oc local e2-slugify   # TUI with every permission auto-approved
-BENCH_SCRIPTED=1 bench/run.sh cx local e1-word-count  # no TUI, unattended
-bench/load.sh oc local e1-word-count 1 2 4 8      # 1, then 2, 4, 8 agents at once
+bench/run.sh cx local e1-word-count                    # one run, TUI
+BENCH_YOLO=1 bench/run.sh oc local e2-slugify          # TUI with every permission auto-approved
+BENCH_SCRIPTED=1 bench/run.sh cx local e1-word-count       # no TUI, unattended
+bench/load.sh oc local e1-word-count 1 2 4 8           # 1, then 2, 4, 8 agents at once
 ```
 
 `load.sh` runs each concurrency level in its own worktree (`~/llm-bench-load/wN`), unattended, stops runs over
@@ -122,10 +145,11 @@ bench/load.sh oc local e1-word-count 1 2 4 8      # 1, then 2, 4, 8 agents at on
 
 | Variable | Effect |
 | --- | --- |
+| `BENCH_TASKSET` | The task set folder (environment or `.env`) |
 | `BENCH_YOLO=1` | Interactive harness auto-approves everything (Codex also skips its own sandbox); recorded as `yolo=1` |
 | `BENCH_SCRIPTED=1` | Run a single prompt task without a TUI |
 | `BENCH_VARIANT=<label>` | Free label for anything else that differs (vLLM settings, harness version); the report keeps it in its own row |
-| `GRADE_WITH_NG=1` | Also run the Angular build when grading T1/T1b (about 1 GB disk, 3 min) |
+| `GRADE_WITH_NG=1` | Passed to graders as `with_ng` (a task set's GUI tasks: also run the Angular build, about 1 GB disk, 3 min) |
 | `BENCH_WORKSPACE`, `BENCH_DEPS`, `BENCH_RESULTS`, `BENCH_ENV` | Other workspace, deps folder, results folder, env file |
 | `LOAD_STAGGER`, `LOAD_TIMEOUT_MIN`, `BENCH_LOAD_DIR` | load.sh: seconds between starts, per run timeout, worktree folder |
 
@@ -141,8 +165,9 @@ bench/regrade.py <run>...       # grade finished runs again with the current gra
 ```
 
 The review page shows the prompt, the agent's final messages, the automatic checks, telemetry, the commands it
-ran, the diff side by side and the grader logs. The form writes `<run>/grade/human.json`. Load test runs need no
-human score and never show up as pending; `exclude` drops a run (aborted, broken) from review and the report.
+ran, the diff side by side, the grader logs and any sections the task adds. The form writes
+`<run>/grade/human.json`. Load test runs need no human score and never show up as pending; `exclude` drops a
+run (aborted, broken) from review and the report.
 
 **Scoring.** Six dimensions, 0 to 3 each, total 18: correctness, procedure, reuse, scope (suggested
 automatically), verification and merge-worthiness (human only). A run that fails a gate (builds, behaviour =
@@ -153,29 +178,23 @@ loop, gave up, wrong fix, rule break, false claim.
 task, mean scores per dimension, cost (wall time, tokens, requests) and failure tags, plus a section per load
 test. `report.csv` has one row per run.
 
-### Tasks
-
-| Task | Base | What it asks |
-| --- | --- | --- |
-
-Each task folder has `prompt.md`, `task.env` (`BASE_TAG`, `NEEDS_REGISTRY`), `grade.py`, usually `hidden/`
-(tests the agent never sees) and `reference.md` (what a good answer looks like, for graders), and optionally
-`turns/` (follow-up prompts, makes the task scripted) and `prepare.sh` (extra setup after the reset).
-
 ### Writing a task
 
-1. Build the starting state in `~/llm-bench-dev` and tag it (or reuse a tag).
-2. Create `bench/tasks/<id>/` with `prompt.md` and `task.env` (`BASE_TAG=<tag>`).
-3. Write hidden tests in `hidden/` that pass on a good fix and fail on the base.
-4. Write `grade.py` with one function `grade(g)`, calling checks on `g` (`bench/lib/checks.py`):
+1. Build the starting state in the task set's workspace repo and tag it (or reuse a tag).
+2. Create `tasks/<id>/` in the task set with `prompt.md` and `task.env` (`BASE_TAG=<tag>`).
+3. Write hidden tests in `hidden/` that pass on a good fix and fail on the base, and a `reference.patch`.
+4. Write `grade.py` with one function `grade(g)`, calling checks on `g` (`bench/lib/checks.py`, plus your task
+   set's Grader subclass). From the example task set:
    ```python
    def grade(g):
-       g.record_diff(); g.diff_check(); g.comment_dashes()
-       g.scope_check(r'^pc/(source/com/example/|test/)')
-       g.pc_compile('compile_ok')
-       g.junit('hidden_test_ok', [g.hidden('MyTest.java')], ['com.example.MyTest'])
+       g.record_diff(); g.diff_check()
+       g.scope_check(r'^(textstats|tests)/')
+       g.pytest('tests_ok', ['tests'])
+       g.pytest('hidden_test_ok', [g.hidden('test_word_count_hidden.py')])
+       g.wrote_tests('tests/')
    ```
-   A check that more than one task could use goes into `checks.py`, not the task.
+   A check other task sets could use goes into `checks.py`; one only your code base needs goes into your task
+   set's `lib/`.
 5. If the defaults don't fit, say in the same `grade.py` how its keys map to the rubric. The defaults
    (`bench/lib/rubric.py`): the behaviour gate is `hidden_test_ok`, the build gate is every build key present,
    correctness is 3 when the hidden test passes, procedure is 3 minus broken rules, scope comes from
@@ -183,8 +202,8 @@ Each task folder has `prompt.md`, `task.env` (`BASE_TAG`, `NEEDS_REGISTRY`), `gr
    `behaviour(auto)`, `correctness(auto)`, `reuse(auto)`, `procedure(auto, score, broken)`; also
    `review_sections()` for extra sections on the review page and `REGRADE_FROM_DIFF = False` when the
    result is not in the workspace diff.
-6. Check the grader on the reference fix and on the base: apply each to a worktree and run
-   `bench/grade.py <id> /tmp/out <worktree>`.
+6. Check the grader on the reference fix and on the base: `bench/reset.py <tag>`, apply the patch to the
+   workspace, `bench/grade.py <id> /tmp/<id>/grade`.
 
 ### Security model
 
@@ -193,11 +212,12 @@ The agent can change anything in its workspace, so nothing from the workspace ru
 - **Agent container:** runs as your uid with `--cap-drop ALL` and `no-new-privileges`, on the `bench-agents`
   network: `--internal` (no route out) and without a host address on it. Its only neighbour is
   `bench-gateway`, called `host.docker.internal` there, which relays exactly three ports to the host: the model
-  forwarder, the allowlist HTTPS proxy (only `api.openai.com:443`, for dry runs) and the T2 registry.
-  `run.sh` verifies before each run that github.com and the host's ssh port are unreachable.
-- **Deps** (`~/llm-bench-deps`) are mounted read-only into every container.
-- **Grading and reset builds** run in `sandbox.py`: a throwaway container without network, with the workspace
-  writable and everything else it needs read-only. The host only runs git and Python.
+  forwarder, the allowlist HTTPS proxy (only `api.openai.com:443`, for dry runs) and a Maven registry for tasks
+  that set `NEEDS_REGISTRY=1`. `run.sh` verifies before each run that github.com and the host's ssh port are
+  unreachable.
+- **Deps** (the task set's deps folder) are mounted read-only into every container.
+- **Grading and the after-reset hook** run in `sandbox.py`: a throwaway container without network, with the
+  workspace writable and everything else it needs read-only. The host only runs git and Python.
 - **Host git** in the workspace runs with hooks and fsmonitor disabled; `gitguard.py` compares the workspace's
   `.git` hooks and config with a baseline before and after each run, restores it and marks the run
   `git_tampered=1` if something changed.
