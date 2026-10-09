@@ -176,8 +176,13 @@ Each task folder has `prompt.md`, `task.env` (`BASE_TAG`, `NEEDS_REGISTRY`), `gr
        g.junit('hidden_test_ok', [g.hidden('MyTest.java')], ['com.example.MyTest'])
    ```
    A check that more than one task could use goes into `checks.py`, not the task.
-5. Tell `bench/lib/rubric.py` how the task's keys map to gates and score suggestions, if the defaults
-   (`hidden_test_ok` is the behaviour gate, build keys are the build gate) are not enough.
+5. If the defaults don't fit, say in the same `grade.py` how its keys map to the rubric. The defaults
+   (`bench/lib/rubric.py`): the behaviour gate is `hidden_test_ok`, the build gate is every build key present,
+   correctness is 3 when the hidden test passes, procedure is 3 minus broken rules, scope comes from
+   `out_of_scope_files`, and there is no reuse suggestion. Optional functions:
+   `behaviour(auto)`, `correctness(auto)`, `reuse(auto)`, `procedure(auto, score, broken)`; also
+   `review_sections()` for extra sections on the review page and `REGRADE_FROM_DIFF = False` when the
+   result is not in the workspace diff.
 6. Check the grader on the reference fix and on the base: apply each to a worktree and run
    `bench/grade.py <id> /tmp/out <worktree>`.
 

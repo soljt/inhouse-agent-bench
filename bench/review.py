@@ -8,7 +8,7 @@
 Load test runs (bench/load.sh) and runs with "exclude": true in grade/human.json are never pending.
 
 Shows the prompt, the agent's final message, the automatic checks and suggestions, telemetry, the commands it
-ran, its diff and the grader logs (T12: its REVIEW.md and the findings that matched nothing). With a display
+ran, its diff, the grader logs and any sections the task adds (T12: its REVIEW.md and the findings). With a display
 this runs a small server on 127.0.0.1 and opens the run in the browser, with the grade form at the bottom;
 "Save and next" moves on to the next pending run. Ctrl+C stops it. --pager, or no display, shows the run in
 $PAGER and opens the grade file in $EDITOR instead.
@@ -33,6 +33,7 @@ BENCH = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BENCH)
 import score as scorer  # noqa: E402
 sys.path.insert(0, os.path.join(BENCH, 'lib'))
+import taskset  # noqa: E402
 import transcript  # noqa: E402
 
 RESULTS = os.environ.get('BENCH_RESULTS', os.path.join(BENCH, 'results'))
@@ -96,11 +97,10 @@ def sections(run_dir, s, blind):
     cmds = tel.get('commands') or []
     out.append((f'Commands run ({len(cmds)}; build/test marked >)', 'text',
                 '\n'.join(('> ' if transcript.VERIFY_CMD.search(c) else '  ') + c.replace('\n', ' ')[:200] for c in cmds)))
-    if s['task'].startswith('t12-'):
-        out.append(('REVIEW.md', 'md', read(os.path.join(g, 'REVIEW.md'))))
-        out.append(('Planted defects', 'text', read(os.path.join(g, 'review-matched.txt'))))
-        out.append(('Findings that matched no planted defect (false alarm, or a real find?)', 'text',
-                    read(os.path.join(g, 'review-unmatched.txt')) or '(none)'))
+    # A task can add its own sections: review_sections() in its grade.py gives (title, kind, file in grade/)
+    hooks = taskset.task_module(s['task'])
+    for title, kind, name in (hooks.review_sections() if hasattr(hooks, 'review_sections') else []):
+        out.append((title, kind, read(os.path.join(g, name)) or '(none)'))
     # Most tasks record diff.patch. T2 has none: its changes are in several repos, one patch each.
     patches = ['diff.patch'] if os.path.exists(os.path.join(g, 'diff.patch')) else \
         sorted(os.path.basename(p) for p in glob.glob(os.path.join(g, '*.patch')))

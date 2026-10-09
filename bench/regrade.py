@@ -7,7 +7,7 @@ For each run: reset the workspace to the task's base tag, apply the run's grade/
 rescore. The previous auto.json is kept as grade/auto.prev.json; human.json is left alone.
 The workspace (default ~/llm-bench) is reset, so it refuses to run while a benchmark container is up.
 Grading runs in the sandbox, like after a run (see grade.py); git on the host runs without hooks.
-T2 cannot be regraded this way: its result lives in git remotes and the registry, not in a diff.
+A task whose result is not in a diff (T2: git remotes and a registry) sets REGRADE_FROM_DIFF = False in its grade.py.
 """
 import json
 import os
@@ -21,21 +21,22 @@ sys.path.insert(0, BENCH)
 import gitguard  # noqa: E402
 import grade as grader  # noqa: E402
 import score as scorer  # noqa: E402
+sys.path.insert(0, os.path.join(BENCH, 'lib'))
+import taskset  # noqa: E402
 
 HOST_GIT = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
-
-NOT_FROM_A_DIFF = {'e1-word-count'}
 
 
 def benchmark_running():
     names = subprocess.run(['docker', 'ps', '--format', '{{.Names}}'], capture_output=True, text=True).stdout
-    return any(n.startswith('bench-') for n in names.split())
+    # Agent containers are bench-<task>-<pid>; bench-gateway is long lived and harmless
+    return any(n.startswith('bench-') and n != 'bench-gateway' for n in names.split())
 
 
 def regrade(run_dir, ws):
     m = scorer.meta(run_dir)
     task = m.get('task') or os.path.basename(os.path.dirname(os.path.abspath(run_dir)))
-    if task in NOT_FROM_A_DIFF:
+    if getattr(taskset.task_module(task), 'REGRADE_FROM_DIFF', True) is False:
         return f'{task} cannot be regraded from a diff'
     gdir = os.path.join(run_dir, 'grade')
     patch = os.path.join(gdir, 'diff.patch')

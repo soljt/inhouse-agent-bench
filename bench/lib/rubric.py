@@ -1,8 +1,10 @@
-"""Gates and automatic score suggestions per task, from a run's grade/auto.json.
+"""Gates and automatic score suggestions, from a run's grade/auto.json.
 
 Automatic scores are suggestions. A human value in grade/human.json always wins. Verification and
 merge-worthiness have no automatic suggestion: they need the transcript and judgement.
+This file has the defaults; a task's grade.py can override parts of them (see suggest and gates).
 """
+from taskset import task_module
 
 DIMENSIONS = ['correctness', 'procedure', 'reuse', 'scope', 'verification', 'merge']
 
@@ -24,7 +26,7 @@ RULE_BREAKS = {
 BUILD_KEYS = ['compile_ok', 'pc_compile_ok', 'regen_ok', 'tsc_ok', 'ng_build_ok', 'ts_tests_ok']
 
 
-def _band(n, bands):
+def band(n, bands):
     """bands: list of (minimum, score), highest minimum first."""
     for minimum, score in bands:
         if n >= minimum:
@@ -32,52 +34,9 @@ def _band(n, bands):
     return 0
 
 
-def _misses(*conds):
+def misses(*conds):
+    """3 minus the number of conditions that do not hold."""
     return 3 - sum(1 for c in conds if not c)
-
-
-def _correctness(task, a):
-    tid = task.split('-')[0]
-    ok = a.get('hidden_test_ok') is True
-    if tid == 't5':
-        return _band(a.get('mutants_killed', 0), [(6, 3), (4, 2), (2, 1)])
-    if tid == 't12':
-        return _band(a.get('defects_found', 0), [(7, 3), (5, 2), (3, 1)])
-    if tid == 't2':
-        keys = ['released_jar_has_constant', 'parent_manages_new_version', 'pc_parent_updated',
-                'classpath_updated', 'commons_lib_only_new_jar']
-        return max(1, 3 - sum(1 for k in keys if a.get(k) is not True))
-    if not ok:
-        return 0
-    if tid in ('t1', 't1b'):
-        return 3 if a.get('frontend_hardcoded_ts') is False else 2
-    if tid == 't8':
-        return 3 if a.get('edge_cases_ok') is True else 2
-    if tid == 't9':
-        return 3 if a.get('legacy_refs_ok') is True else 2
-    return 3
-
-
-def _reuse(task, a):
-    tid = task.split('-')[0]
-    if tid in ('t1', 't1b'):
-        return max(1, _misses(a.get('frontend_hardcoded_ts') is False, a.get('edited_constants_xml') is True))
-    if tid == 't4':
-        return 3 if a.get('new_blank_helper') is False else 1
-    if tid == 't12':
-        # For a review: did it catch the DRY slip (D1) and the wrong reuse of an existing limit (D2)
-        ids = str(a.get('defect_ids', '')).split(',')
-        return 1 + ('D1' in ids) + ('D2' in ids)
-    if tid == 't7':
-        return 3 if a.get('uses_error_helper') is True else 2
-    if tid in ('t8', 't13'):
-        return max(0, _misses(a.get('limit_literal_lines', 9) <= 1, a.get('length_check_lines', 9) <= 1,
-                              a.get('attribute_name_literals', 9) == 0))
-    if tid == 't9':
-        return _band(-a.get('magic_number_lines', 9), [(0, 3), (-2, 2), (-99, 1)])
-    if tid == 't10':
-        return max(1, _misses(a.get('english_in_show_error', 9) == 0, a.get('prefix_literals', 9) <= 1))
-    return None
 
 
 def _procedure(a):
@@ -89,43 +48,33 @@ def _scope(a):
     n = a.get('out_of_scope_files')
     if n is None:
         return None
-    return _band(-n, [(0, 3), (-2, 2), (-5, 1)])
+    return band(-n, [(0, 3), (-2, 2), (-5, 1)])
+
+
+def hidden_test_ok(a):
+    return a.get('hidden_test_ok') is True
 
 
 def gates(task, a):
-    tid = task.split('-')[0]
+    """builds: every build key present is true. behaviour: the task's behaviour(auto), by default the hidden test."""
+    hooks = task_module(task)
     builds = all(a[k] is True for k in BUILD_KEYS if k in a)
-    if tid == 't5':
-        behaviour = a.get('tests_pass_on_original') is True and a.get('tests_found', 0) > 0
-    elif tid == 't2':
-        behaviour = a.get('released_jar_has_constant') is True and a.get('parent_manages_new_version') is True
-    elif tid == 't12':
-        behaviour = a.get('review_file_present') is True
-    else:
-        behaviour = a.get('hidden_test_ok') is True
+    behaviour = hooks.behaviour(a) if hasattr(hooks, 'behaviour') else hidden_test_ok(a)
     return {'builds': builds, 'behaviour': behaviour}
 
 
 def suggest(task, a):
-    """Automatic suggestion per dimension (None = human only) and the rules seen broken."""
-    tid = task.split('-')[0]
+    """Automatic suggestion per dimension (None = human only) and the rules seen broken.
+    Defaults: correctness 3 when the hidden test passes, else 0; procedure 3 minus broken rules; scope from the
+    out of scope file count; no reuse suggestion. A task's grade.py can replace correctness, reuse and procedure."""
+    hooks = task_module(task)
     procedure, broken = _procedure(a)
-    if tid == 't12':
-        # A review has no repository rules to break; the procedure is the requested findings format
-        broken = ['review_format'] if a.get('defects_unparsed', 0) else []
-        procedure = 3 if not broken else 2
-    if tid == 't13':
-        # Asking for the missing limit before editing is the point of the task; a barrage of questions is not
-        if a.get('asked_before_editing') is not True:
-            broken = broken + ['guessed_instead_of_asking']
-            procedure = max(0, procedure - 2)
-        if a.get('turn1_questions', 0) > 3:
-            broken = broken + ['too_many_questions']
-            procedure = max(0, procedure - 1)
+    if hasattr(hooks, 'procedure'):
+        procedure, broken = hooks.procedure(a, procedure, broken)
     return {
-        'correctness': _correctness(task, a),
+        'correctness': hooks.correctness(a) if hasattr(hooks, 'correctness') else (3 if hidden_test_ok(a) else 0),
         'procedure': procedure,
-        'reuse': _reuse(task, a),
+        'reuse': hooks.reuse(a) if hasattr(hooks, 'reuse') else None,
         'scope': _scope(a),
         'verification': None,
         'merge': None,
