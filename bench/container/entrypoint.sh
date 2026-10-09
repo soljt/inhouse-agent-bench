@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # Runs inside the container. Starts the harness in the agent's working directory with the
 # task prompt. Approval settings are the harness's own (opencode/opencode.json, codex/config.toml).
-# Env: HARNESS=oc|cx, MODEL_REF (provider/model for oc), PROFILE and MODEL (for cx), PROMPT_FILE
+# Env: HARNESS=oc|cx, MODEL_REF (provider/model for oc), PROFILE and MODEL (for cx), PROMPT_FILE,
+# AGENT_WORKDIR (where the agent starts, relative to the workspace at /work; from the task set)
 # Scripted mode (TURNS_IN set): no TUI. The prompt is turn 1, then each TURNS_IN/NN.md is sent as a follow-up
 # in the same session, with all permissions auto-approved (the container is the sandbox). After every turn the
 # workspace diff and the agent's last message go to TURNS_OUT/NN.diff and NN.last.md.
 # BENCH_YOLO=1: the interactive TUI is auto-approved too (Codex also skips its own sandbox).
 set -euo pipefail
-for d in /work/the app/angular /work/the app/TypeScript; do
-  [ -d "$d/node_modules/." ] || { echo "$d/node_modules missing: run bench/setup-deps.sh on the host" >&2; exit 2; }
-done
-cd /work/pc
+cd "/work/${AGENT_WORKDIR:-.}"
 prompt="$(cat "$PROMPT_FILE")"
 
 snapshot() { # turn number

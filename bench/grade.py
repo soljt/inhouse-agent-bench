@@ -8,8 +8,9 @@ Grading runs the agent's build files and tests, so it happens in a throwaway con
 folder read-only, and only <out-dir> writable.
 
 Each task has a grade.py next to its prompt with one function, grade(g), that calls checks on g, a
-lib/checks.py Grader. The workspace defaults to ~/llm-bench. The run folder is the parent of <out-dir>
-(run.sh passes $RUN/grade); tasks that read turns or the registry log find them there.
+lib/checks.py Grader. The task set comes from BENCH_TASKSET (see lib/taskset.py); the workspace defaults to
+the task set's. The run folder is the parent of <out-dir> (run.sh passes $RUN/grade); tasks that read turns
+or the registry log find them there.
 --with-ng also runs the Angular build where a task has one (T1, T1b; needs about 1 GB free disk).
 """
 import os
@@ -19,6 +20,7 @@ BENCH = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BENCH)
 sys.path.insert(0, os.path.join(BENCH, 'lib'))
 import checks  # noqa: E402
+import taskset  # noqa: E402
 
 
 def task_env(task_dir):
@@ -32,10 +34,10 @@ def task_env(task_dir):
 
 
 def grade(task, out, ws, with_ng=False):
-    task_dir = os.path.join(BENCH, 'tasks', task)
+    task_dir = taskset.task_dir(task)
     g = checks.Grader(task_dir, os.path.abspath(out), os.path.abspath(ws), task_env(task_dir)['BASE_TAG'],
                       with_ng=with_ng)
-    checks.import_file(os.path.join(task_dir, 'grade.py')).grade(g)
+    taskset.task_module(task).grade(g)
     return g.emit()
 
 
@@ -46,8 +48,9 @@ def grade_in_sandbox(task, out, ws, with_ng=False, **kwargs):
     out, ws = os.path.abspath(out), os.path.abspath(ws)
     os.makedirs(out, exist_ok=True)  # docker would create a missing mount point owned by root
     cmd = ['python3', os.path.abspath(__file__), task, out, ws, '--in-sandbox'] + (['--with-ng'] if with_ng else [])
-    ro = [os.path.join(BENCH, 'lib'), os.path.join(BENCH, 'tasks'), os.path.abspath(__file__), os.path.dirname(out)]
-    return sandbox.run(cmd, ws, ro=ro, rw=[out], **kwargs).returncode
+    root = taskset.root()
+    ro = [os.path.join(BENCH, 'lib'), root, os.path.abspath(__file__), os.path.dirname(out)]
+    return sandbox.run(cmd, ws, ro=ro, rw=[out], env={'BENCH_TASKSET': root}, **kwargs).returncode
 
 
 def main(args):
@@ -56,7 +59,7 @@ def main(args):
     args = [a for a in args if a not in ('--with-ng', '--in-sandbox')]
     if len(args) < 2:
         sys.exit(__doc__)
-    ws = args[2] if len(args) > 2 else os.path.expanduser('~/llm-bench')
+    ws = args[2] if len(args) > 2 else taskset.config()['workspace']
     if not in_sandbox:
         sys.exit(grade_in_sandbox(args[0], args[1], ws, with_ng))
     print(grade(args[0], args[1], ws, with_ng), end='')

@@ -7,7 +7,7 @@ Usage:
 
 The agent, and the grader running the agent's build files, can write to the workspace's .git. A hook, or
 a config entry such as core.fsmonitor, a filter driver or a diff command, would then run on the host the
-next time git runs there (reset.sh, load.sh). Host git calls already pass -c core.hooksPath=/dev/null and
+next time git runs there (reset.py, load.sh). Host git calls already pass -c core.hooksPath=/dev/null and
 -c core.fsmonitor=false; this guard covers everything else.
 
 Guarded: hooks/ and info/attributes (exact), the config and each worktree's config.worktree (every key
@@ -28,6 +28,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+# Every git command the host runs in a workspace: never the agent's hooks or fsmonitor command
+HOST_GIT = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
 
 STATE = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state')), 'llm-bench', 'gitguard')
 

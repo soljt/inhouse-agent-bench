@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
 import rubric  # noqa: E402
+import taskset  # noqa: E402
 import transcript  # noqa: E402
 
 FAILURE_TAGS = ['bad tool call', 'loop', 'gave up', 'wrong fix', 'rule break', 'false claim']
@@ -51,8 +52,9 @@ def score(run_dir):
     task = m.get('task') or os.path.basename(os.path.dirname(os.path.abspath(run_dir)))
     auto_path = os.path.join(run_dir, 'grade', 'auto.json')
     a = json.load(open(auto_path)) if os.path.exists(auto_path) else {}
-    suggested, broken = rubric.suggest(task, a)
-    gate = rubric.gates(task, a)
+    hooks = taskset.task_module(task, m.get('taskset'))
+    suggested, broken = rubric.suggest(hooks, a)
+    gate = rubric.gates(hooks, a)
     h = load_human(run_dir) or {}
     gate['no_harm'] = h.get('no_harm', True) is not False
     gate['passed'] = bool(a) and all(gate.values())
@@ -88,7 +90,7 @@ def score(run_dir):
 
     result = {
         'run': os.path.basename(os.path.abspath(run_dir)), 'task': task,
-        'harness': m.get('harness'), 'target': m.get('target'), 'model': m.get('model'),
+        'harness': m.get('harness'), 'target': m.get('target'), 'model': m.get('model'), 'taskset': m.get('taskset'),
         'variant': m.get('variant') or None, 'yolo': m.get('yolo') == '1', 'excluded': h.get('exclude') is True,
         'start': m.get('start'), 'end': m.get('end'), 'wall_min': wall,
         'scripted': m.get('scripted') == '1', 'timed_out': m.get('timed_out') == '1', 'load_group': m.get('load_group'),

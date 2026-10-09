@@ -5,14 +5,17 @@
 #   e.g. bench/run.sh oc dryrun e1-word-count
 set -euo pipefail
 BENCH="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"; REPO="$(dirname "$BENCH")"
-WS="${BENCH_WORKSPACE:-$HOME/llm-bench}"; DEPS="${BENCH_DEPS:-$HOME/llm-bench-deps}"
 BRIDGE_IP=172.17.0.1; PROXY_PORT=3128
 harness="$1"; target="$2"; task="$3"
-TASK="$BENCH/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task" >&2; exit 2; }
 # BENCH_ENV: another env file (e.g. a second model server); BENCH_RESULTS: another results folder
 # BENCH_VARIANT: a label for anything else that differs between runs (vLLM settings, harness version);
 # report.py keeps each label in its own row. BENCH_YOLO=1 auto-approves the TUI and is keyed the same way.
-set -a; . "${BENCH_ENV:-$REPO/.env}"; . "$TASK/task.env"; set +a
+set -a; . "${BENCH_ENV:-$REPO/.env}"; set +a
+# The task set (BENCH_TASKSET): its image, workspace, deps and the agent's start folder (see lib/taskset.py)
+eval "$(python3 "$BENCH/lib/taskset.py" env)"
+WS="$TASKSET_WORKSPACE"; DEPS="$TASKSET_DEPS"; IMAGE="$TASKSET_IMAGE"
+TASK="$TASKSET/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task in $TASKSET" >&2; exit 2; }
+set -a; . "$TASK/task.env"; set +a
 RESULTS="${BENCH_RESULTS:-$BENCH/results}"
 
 # Agents join bench-agents: no route out and no host address on it. Its only other member is bench-gateway,
@@ -23,9 +26,9 @@ python3 "$BENCH/agentnet.py" ensure "$MODEL_PORT" "$PROXY_PORT" 8081
 RUN_NET=(--network bench-agents -v "$DEPS:$DEPS:ro")
 
 # The container must have no direct internet and reach nothing on the host but the relayed ports. Abort rather than run unconfined.
-code=$(docker run --rm "${RUN_NET[@]}" --entrypoint curl llm-bench -s -o /dev/null -w '%{http_code}' --max-time 8 https://github.com || true)
+code=$(docker run --rm "${RUN_NET[@]}" --entrypoint curl "$IMAGE" -s -o /dev/null -w '%{http_code}' --max-time 8 https://github.com || true)
 [ "$code" = "000" ] || { echo "Container reached github.com directly (HTTP $code). Fix bridge egress first." >&2; exit 3; }
-if docker run --rm "${RUN_NET[@]}" --entrypoint bash llm-bench -c \
+if docker run --rm "${RUN_NET[@]}" --entrypoint bash "$IMAGE" -c \
      "timeout 3 bash -c 'exec 3<>/dev/tcp/host.docker.internal/22' || timeout 3 bash -c 'exec 3<>/dev/tcp/$BRIDGE_IP/22'" 2>/dev/null; then
   echo "Container reached the host's ssh port. The agent network is not isolated (see agentnet.py)." >&2; exit 3
 fi
@@ -52,14 +55,14 @@ else
       --log "$BENCH/results/egress.log" >/dev/null 2>&1 &
     sleep 1
   fi
-  code=$(docker run --rm "${RUN_NET[@]}" --entrypoint curl llm-bench -s -o /dev/null -w '%{http_code}' --max-time 8 \
+  code=$(docker run --rm "${RUN_NET[@]}" --entrypoint curl "$IMAGE" -s -o /dev/null -w '%{http_code}' --max-time 8 \
     -H "Authorization: Bearer $LOCAL_API_KEY" "$base_url/models" || true)
   [ "$code" = "200" ] || { echo "Model endpoint $base_url not reachable from the container (HTTP $code). Is the SSH tunnel up?" >&2; exit 3; }
 fi
 
 # Java and Maven take the home directory from /etc/passwd, not $HOME, so mount the run's home
 # where the image's passwd entry for this uid points (uid 1000 is "node" in the image)
-AGENT_HOME=$(docker run --rm --user "$(id -u):$(id -g)" --entrypoint sh llm-bench -c 'getent passwd "$(id -u)" | cut -d: -f6')
+AGENT_HOME=$(docker run --rm --user "$(id -u):$(id -g)" --entrypoint sh "$IMAGE" -c 'getent passwd "$(id -u)" | cut -d: -f6')
 AGENT_HOME="${AGENT_HOME:-/home/agent}"
 
 # BENCH_RUN_SUFFIX keeps concurrent runs (bench/load.sh) that start in the same second apart
@@ -67,19 +70,19 @@ RUN="$RESULTS/$task/$harness-$target-${model//\//_}-$(date +%y%m%d_%H%M%S)${BENC
 mkdir -p "$RUN/home"; cp "$TASK/prompt.md" "$RUN/prompt.md"
 # Refuse to start on a workspace whose .git hooks or config changed since the last run (see gitguard.py)
 python3 "$BENCH/gitguard.py" check "$WS" --before || exit 3
-"$BENCH/reset.sh" "$BASE_TAG" "$WS"
+python3 "$BENCH/reset.py" "$BASE_TAG" "$WS"
 [ -x "$TASK/prepare.sh" ] && "$TASK/prepare.sh" "$WS"
 mkdir -p "$RUN/tomcat/lib"
 printf '[user]\n\tname = Bench Agent\n\temail = agent@bench.example\n' > "$RUN/home/.gitconfig"
 registry_pid=""
 if [ "${NEEDS_REGISTRY:-0}" = 1 ]; then
-  mkdir -p "$RUN/home/.m2"; cp "$BENCH/container/maven-settings.xml" "$RUN/home/.m2/settings.xml"
+  mkdir -p "$RUN/home/.m2"; cp "$TASKSET/container/maven-settings.xml" "$RUN/home/.m2/settings.xml"
   python3 "$BENCH/maven-repo.py" --listen "$BRIDGE_IP:8081" --seed "$DEPS/maven-seed" \
     --store "$RUN/registry" --log "$RUN/registry.log" & registry_pid=$!
   sleep 1
 fi
 { echo "task=$task"; echo "harness=$harness"; echo "target=$target"; echo "model=$model"
-  echo "base_tag=$BASE_TAG"; echo "workspace=$WS"; echo "start=$(date -Is)"
+  echo "taskset=$TASKSET"; echo "base_tag=$BASE_TAG"; echo "workspace=$WS"; echo "start=$(date -Is)"
   for kv in ${BENCH_META:-}; do echo "$kv"; done; } > "$RUN/meta.txt"
 [ "${BENCH_YOLO:-0}" = 1 ] && echo "yolo=1" >> "$RUN/meta.txt"
 [ -n "${BENCH_VARIANT:-}" ] && echo "variant=$BENCH_VARIANT" >> "$RUN/meta.txt"
@@ -99,11 +102,11 @@ docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]
   --user "$(id -u):$(id -g)" -e HOME="$AGENT_HOME" -v "$RUN/home:$AGENT_HOME" \
   -v "$WS:/work" -v "$RUN/prompt.md:/run/prompt.md:ro" -v "$RUN/tomcat:/usr/share/tomcat" \
   -v "$REPO/opencode:/harness/opencode:ro" -v "$REPO/codex:/harness/codex:ro" \
-  -e HARNESS="$harness" -e PROMPT_FILE=/run/prompt.md \
+  -e HARNESS="$harness" -e PROMPT_FILE=/run/prompt.md -e AGENT_WORKDIR="$TASKSET_AGENT_WORKDIR" \
   -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e MODEL="$model" \
   -e LOCAL_BASE_URL="$base_url" -e LOCAL_API_KEY -e LOCAL_MODEL \
   -e OPENAI_API_KEY -e DRYRUN_MODEL -e BENCH_YOLO "${proxy_env[@]}" \
-  llm-bench; }
+  "$IMAGE"; }
 if [ ${#tty[@]} -eq 0 ]; then docker_run 2>&1 | tee "$RUN/console.log" || true; else docker_run || true; fi
 
 echo "end=$(date -Is)" >> "$RUN/meta.txt"

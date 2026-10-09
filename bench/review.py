@@ -98,7 +98,7 @@ def sections(run_dir, s, blind):
     out.append((f'Commands run ({len(cmds)}; build/test marked >)', 'text',
                 '\n'.join(('> ' if transcript.VERIFY_CMD.search(c) else '  ') + c.replace('\n', ' ')[:200] for c in cmds)))
     # A task can add its own sections: review_sections() in its grade.py gives (title, kind, file in grade/)
-    hooks = taskset.task_module(s['task'])
+    hooks = taskset.task_module(s['task'], s.get('taskset'))
     for title, kind, name in (hooks.review_sections() if hasattr(hooks, 'review_sections') else []):
         out.append((title, kind, read(os.path.join(g, name)) or '(none)'))
     # Most tasks record diff.patch. T2 has none: its changes are in several repos, one patch each.

@@ -2,9 +2,8 @@
 
 Automatic scores are suggestions. A human value in grade/human.json always wins. Verification and
 merge-worthiness have no automatic suggestion: they need the transcript and judgement.
-This file has the defaults; a task's grade.py can override parts of them (see suggest and gates).
+This file has the defaults; a task's grade.py (its hooks module) can override parts of them, see suggest and gates.
 """
-from taskset import task_module
 
 DIMENSIONS = ['correctness', 'procedure', 'reuse', 'scope', 'verification', 'merge']
 
@@ -55,19 +54,17 @@ def hidden_test_ok(a):
     return a.get('hidden_test_ok') is True
 
 
-def gates(task, a):
+def gates(hooks, a):
     """builds: every build key present is true. behaviour: the task's behaviour(auto), by default the hidden test."""
-    hooks = task_module(task)
     builds = all(a[k] is True for k in BUILD_KEYS if k in a)
     behaviour = hooks.behaviour(a) if hasattr(hooks, 'behaviour') else hidden_test_ok(a)
     return {'builds': builds, 'behaviour': behaviour}
 
 
-def suggest(task, a):
+def suggest(hooks, a):
     """Automatic suggestion per dimension (None = human only) and the rules seen broken.
     Defaults: correctness 3 when the hidden test passes, else 0; procedure 3 minus broken rules; scope from the
     out of scope file count; no reuse suggestion. A task's grade.py can replace correctness, reuse and procedure."""
-    hooks = task_module(task)
     procedure, broken = _procedure(a)
     if hasattr(hooks, 'procedure'):
         procedure, broken = hooks.procedure(a, procedure, broken)

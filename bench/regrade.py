@@ -5,7 +5,7 @@ Usage: bench/regrade.py <run-dir> [<run-dir> ...] [--workspace <dir>]
 
 For each run: reset the workspace to the task's base tag, apply the run's grade/diff.patch, grade, and
 rescore. The previous auto.json is kept as grade/auto.prev.json; human.json is left alone.
-The workspace (default ~/llm-bench) is reset, so it refuses to run while a benchmark container is up.
+The workspace (default: the task set's) is reset, so it refuses to run while a benchmark container is up.
 Grading runs in the sandbox, like after a run (see grade.py); git on the host runs without hooks.
 A task whose result is not in a diff (T2: git remotes and a registry) sets REGRADE_FROM_DIFF = False in its grade.py.
 """
@@ -20,11 +20,10 @@ BENCH = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BENCH)
 import gitguard  # noqa: E402
 import grade as grader  # noqa: E402
+import reset as resetter  # noqa: E402
 import score as scorer  # noqa: E402
 sys.path.insert(0, os.path.join(BENCH, 'lib'))
 import taskset  # noqa: E402
-
-HOST_GIT = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
 
 
 def benchmark_running():
@@ -36,17 +35,19 @@ def benchmark_running():
 def regrade(run_dir, ws):
     m = scorer.meta(run_dir)
     task = m.get('task') or os.path.basename(os.path.dirname(os.path.abspath(run_dir)))
+    if m.get('taskset'):
+        os.environ['BENCH_TASKSET'] = m['taskset']  # reset and grade with the task set the run used
     if getattr(taskset.task_module(task), 'REGRADE_FROM_DIFF', True) is False:
         return f'{task} cannot be regraded from a diff'
     gdir = os.path.join(run_dir, 'grade')
     patch = os.path.join(gdir, 'diff.patch')
     if not os.path.exists(patch):
         return 'no grade/diff.patch'
-    task_dir = os.path.join(BENCH, 'tasks', task)
+    task_dir = taskset.task_dir(task)
     base = grader.task_env(task_dir)['BASE_TAG']
     if gitguard.check(ws, before=True):
         return 'the workspace .git changed, see the gitguard message above'
-    subprocess.run([os.path.join(BENCH, 'reset.sh'), base, ws], check=True, stdout=subprocess.DEVNULL)
+    resetter.reset(base, ws)
     prepare = os.path.join(task_dir, 'prepare.sh')
     if os.path.exists(prepare):
         subprocess.run([prepare, ws], check=True)
@@ -54,7 +55,7 @@ def regrade(run_dir, ws):
     if os.path.getsize(patch):
         tmp = tempfile.NamedTemporaryFile(suffix='.patch', delete=False)
         shutil.copyfile(patch, tmp.name)
-        res = subprocess.run([*HOST_GIT, 'apply', '--whitespace=nowarn', tmp.name], cwd=ws, capture_output=True, text=True)
+        res = subprocess.run([*gitguard.HOST_GIT, 'apply', '--whitespace=nowarn', tmp.name], cwd=ws, capture_output=True, text=True)
         os.unlink(tmp.name)
         if res.returncode:
             return 'diff does not apply: ' + res.stderr.strip()
@@ -77,7 +78,7 @@ def changes(run_dir):
 
 
 def main(args):
-    ws = os.path.expanduser('~/llm-bench')
+    ws = taskset.config()['workspace']
     if '--workspace' in args:
         i = args.index('--workspace')
         ws = os.path.abspath(args[i + 1])

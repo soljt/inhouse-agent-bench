@@ -17,10 +17,12 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
+import taskset  # noqa: E402
+
 NETWORK = 'bench-agents'
 GATEWAY = 'bench-gateway'
 ALIAS = 'host.docker.internal'
-IMAGE = 'llm-bench'
 PORTS_LABEL = 'bench.ports'
 BENCH = os.path.dirname(os.path.abspath(__file__))
 
@@ -53,7 +55,7 @@ def start_gateway(ports):
     res = docker('run', '-d', '--name', GATEWAY, '--label', f'{PORTS_LABEL}={",".join(map(str, sorted(ports)))}',
                  '--add-host', f'{ALIAS}:host-gateway', '--user', f'{os.getuid()}:{os.getgid()}',
                  '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
-                 '-v', f'{proxy}:/gateway/egress-proxy.py:ro', '--entrypoint', 'python3', IMAGE,
+                 '-v', f'{proxy}:/gateway/egress-proxy.py:ro', '--entrypoint', 'python3', taskset.config()['image'],
                  '/gateway/egress-proxy.py', '--relay-to', ALIAS, *relays)
     if res.returncode:
         if 'is already in use' in res.stderr:  # a parallel run started it first

@@ -9,10 +9,12 @@ set -euo pipefail
 BENCH="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 [ $# -ge 4 ] || { sed -n '2,7p' "$0"; exit 2; }
 harness="$1"; target="$2"; task="$3"; shift 3; levels=("$@")
-TASK="$BENCH/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task" >&2; exit 2; }
+# The task set (BENCH_TASKSET, from the environment or .env): workspace and tasks (see lib/taskset.py)
+eval "$(python3 "$BENCH/lib/taskset.py" env)"
+TASK="$TASKSET/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task in $TASKSET" >&2; exit 2; }
 . "$TASK/task.env"
 [ "${NEEDS_REGISTRY:-0}" = 1 ] && { echo "$task needs the Maven registry on a fixed port; not usable for load tests" >&2; exit 2; }
-MAIN="${BENCH_WORKSPACE:-$HOME/llm-bench}"; DEPS="${BENCH_DEPS:-$HOME/llm-bench-deps}"; LOAD="${BENCH_LOAD_DIR:-$HOME/llm-bench-load}"
+MAIN="$TASKSET_WORKSPACE"; LOAD="${BENCH_LOAD_DIR:-$HOME/llm-bench-load}"
 STAGGER="${LOAD_STAGGER:-3}"
 TIMEOUT_MIN="${LOAD_TIMEOUT_MIN:-45}"   # per run; a run over this is stopped, graded as it stands, and marked timed_out
 RESULTS="${BENCH_RESULTS:-$BENCH/results}"
@@ -22,9 +24,8 @@ mkdir -p "$LOAD"
 for i in $(seq 1 "$max"); do
   w="$LOAD/w$i"
   if [ ! -e "$w/.git" ]; then
+    # run.sh resets it before each run; the task set's after-reset hook sets up deps links
     git -C "$MAIN" -c core.hooksPath=/dev/null -c core.fsmonitor=false worktree add -q --detach "$w" "$BASE_TAG"
-    ln -sfn "$DEPS/angular/node_modules" "$w/the app/angular/node_modules"
-    ln -sfn "$DEPS/TypeScript/node_modules" "$w/the app/TypeScript/node_modules"
   fi
 done
 
