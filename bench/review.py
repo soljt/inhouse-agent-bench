@@ -5,6 +5,8 @@
   bench/review.py next [--blind]     review the next run that still needs a human score
   bench/review.py pending            list runs that still need a human score
 
+Load test runs (bench/load.sh) and runs with "exclude": true in grade/human.json are never pending.
+
 Shows the prompt, the agent's final message, the automatic checks and suggestions, telemetry, the
 commands it ran and its diff (T12: its REVIEW.md and the findings that matched nothing) in a pager,
 then opens the grade file in $EDITOR. --blind hides harness and model and picks a random pending run.
@@ -38,7 +40,7 @@ def pending():
         if not os.path.exists(os.path.join(r, 'grade', 'auto.json')):
             continue
         s = scorer.score(r)
-        if not s['complete']:
+        if not s['complete'] and not s['load_group'] and not s['excluded']:
             out.append(r)
     return out
 

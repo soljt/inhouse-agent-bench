@@ -29,13 +29,15 @@ def meta(run_dir):
 def human_template(suggested):
     return {
         '_how': 'null keeps the automatic value. Scores 0 to 3, see benchmarks.md Rubric. '
-                'failure_tag: one of ' + ', '.join(FAILURE_TAGS) + ', or null.',
+                'failure_tag: one of ' + ', '.join(FAILURE_TAGS) + ', or null. '
+                'exclude: true drops the run from review and the report (aborted or broken runs).',
         '_auto': suggested,
         'no_harm': True,
         'scores': {d: None for d in rubric.DIMENSIONS},
         'failure_tag': None,
         'intervention': '',
         'notes': '',
+        'exclude': False,
     }
 
 
@@ -87,6 +89,7 @@ def score(run_dir):
     result = {
         'run': os.path.basename(os.path.abspath(run_dir)), 'task': task,
         'harness': m.get('harness'), 'target': m.get('target'), 'model': m.get('model'),
+        'variant': m.get('variant') or None, 'yolo': m.get('yolo') == '1', 'excluded': h.get('exclude') is True,
         'start': m.get('start'), 'end': m.get('end'), 'wall_min': wall,
         'scripted': m.get('scripted') == '1', 'timed_out': m.get('timed_out') == '1', 'load_group': m.get('load_group'),
         'load_level': int(m['load_level']) if m.get('load_level') else None,

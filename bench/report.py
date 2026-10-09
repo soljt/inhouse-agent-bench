@@ -6,6 +6,9 @@ Usage: bench/report.py [--task <prefix>] [--out <dir>] [--load <group>] [--inclu
 Load test runs (bench/load.sh) are left out of the model tables unless --include-load, and summarised per
 concurrency level in "Load tests" (all groups, or only --load <group>).
 
+Rows are harness, target and model, plus the run's BENCH_VARIANT label and "yolo" (BENCH_YOLO=1) when set.
+Runs with "exclude": true in grade/human.json are left out entirely.
+
 A cell in the main table reads `mean (min-max) g/n`: mean total out of 18 over the complete runs, the
 spread, and how many of the n runs passed the gates. `+k?` means k more runs still need a human score.
 """
@@ -26,7 +29,8 @@ RESULTS = os.environ.get('BENCH_RESULTS', os.path.join(BENCH, 'results'))
 
 
 def label(s):
-    return f"{s['harness'] or '?'} {s['target'] or '?'} {s['model'] or '?'}"
+    parts = [s['harness'] or '?', s['target'] or '?', s['model'] or '?', s['variant'], 'yolo' if s['yolo'] else None]
+    return ' '.join(p for p in parts if p)
 
 
 def fmt(xs, digits=1):
@@ -52,7 +56,7 @@ def main(argv):
         run = os.path.dirname(meta)
         if os.path.exists(os.path.join(run, 'grade', 'auto.json')):
             s = scorer.score(run)
-            if s['task'].startswith(task_prefix):
+            if s['task'].startswith(task_prefix) and not s['excluded']:
                 s['_dir'] = os.path.relpath(run, RESULTS)
                 if s.get('load_group'):
                     if not load_only or s['load_group'] == load_only:
@@ -174,7 +178,7 @@ def main(argv):
     os.makedirs(out_dir, exist_ok=True)
     open(os.path.join(out_dir, 'report.md'), 'w').write('\n'.join(md) + '\n')
 
-    fields = ['run', 'task', 'harness', 'target', 'model', 'start', 'end', 'wall_min', 'load_group', 'load_level', 'auto_subtotal', 'gate_passed', 'builds', 'behaviour',
+    fields = ['run', 'task', 'harness', 'target', 'model', 'variant', 'yolo', 'start', 'end', 'wall_min', 'load_group', 'load_level', 'auto_subtotal', 'gate_passed', 'builds', 'behaviour',
               'no_harm'] + DIMENSIONS + [d + '_source' for d in DIMENSIONS] + \
              ['total', 'complete', 'rules_broken', 'failure_tag', 'failure_tag_suggested', 'model_requests',
               'input_tokens', 'output_tokens', 'peak_context', 'tool_calls', 'tool_errors', 'nonzero_exits',

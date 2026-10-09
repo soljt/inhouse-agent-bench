@@ -10,6 +10,8 @@ BRIDGE_IP=172.17.0.1; PROXY_PORT=3128
 harness="$1"; target="$2"; task="$3"
 TASK="$BENCH/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task" >&2; exit 2; }
 # BENCH_ENV: another env file (e.g. a second model server); BENCH_RESULTS: another results folder
+# BENCH_VARIANT: a label for anything else that differs between runs (vLLM settings, harness version);
+# report.py keeps each label in its own row. BENCH_YOLO=1 auto-approves the TUI and is keyed the same way.
 set -a; . "${BENCH_ENV:-$REPO/.env}"; . "$TASK/task.env"; set +a
 RESULTS="${BENCH_RESULTS:-$BENCH/results}"
 
@@ -69,6 +71,7 @@ fi
   echo "base_tag=$BASE_TAG"; echo "workspace=$WS"; echo "start=$(date -Is)"
   for kv in ${BENCH_META:-}; do echo "$kv"; done; } > "$RUN/meta.txt"
 [ "${BENCH_YOLO:-0}" = 1 ] && echo "yolo=1" >> "$RUN/meta.txt"
+[ -n "${BENCH_VARIANT:-}" ] && echo "variant=$BENCH_VARIANT" >> "$RUN/meta.txt"
 
 # Scripted tasks (a turns/ folder) run without a TUI: follow-ups are sent in the same session, see entrypoint.sh
 tty=(-it); scripted=()
