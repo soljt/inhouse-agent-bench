@@ -3,14 +3,17 @@
 A task set is a folder with
   taskset.toml       image, workspace, deps folder, where the agent starts, reset settings (see below)
   tasks/<id>/        prompt.md, task.env (BASE_TAG=...), grade.py, and optionally hidden/, turns/, prepare.sh
-  lib/               optional Python modules for its graders (on the path while grading and scoring)
+  lib/               optional Python modules for its graders (on the path while grading and scoring); the one
+                     named by module may define Grader (a checks.Grader subclass), RULE_BREAKS and BUILD_KEYS
 plus whatever its hooks and image need. It is found through BENCH_TASKSET (environment, or the repo's
 .env), and a run records which one it used in meta.txt.
 
 taskset.toml keys:
-  name, image (docker image), workspace (git repo with the base tags), deps (folder shared read-only),
-  agent_workdir (relative to the workspace), [reset] keep (untracked paths git clean keeps) and
-  after (script in the task set, run in the sandbox after the reset with WS and DEPS set).
+  name, image (docker image), workspace (git repo with the base tags), deps (folder shared read-only, optional),
+  agent_workdir (relative to the workspace), module (a module in lib/, optional), [reset] keep (untracked
+  paths git clean keeps) and after (script in the task set, run in the sandbox after the reset with WS and
+  DEPS set), [agent] run_dirs (container path = folder in the run folder, mounted into the agent container,
+  e.g. where a task deploys to) and create (more folders to create in the run folder).
 BENCH_WORKSPACE and BENCH_DEPS override workspace and deps.
 
 A task's grade.py has grade(g) for the checks. It may also define how its checks map to the rubric
@@ -19,11 +22,13 @@ review_sections() and REGRADE_FROM_DIFF.
 
 Usage: python3 bench/lib/taskset.py env    shell assignments for run.sh and load.sh
 """
+import importlib
 import os
 import shlex
 import sys
 import tomllib
 
+import checks
 from checks import import_file
 
 BENCH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +59,10 @@ def root(path=None):
     return path
 
 
+def _optional_path(p):
+    return os.path.abspath(os.path.expanduser(p)) if p else ''
+
+
 def config(path=None):
     """taskset.toml with defaults filled in and paths expanded."""
     base = root(path)
@@ -64,10 +73,13 @@ def config(path=None):
         'name': c.get('name', os.path.basename(base)),
         'image': c['image'],
         'workspace': os.path.abspath(os.path.expanduser(os.environ.get('BENCH_WORKSPACE') or c['workspace'])),
-        'deps': os.path.abspath(os.path.expanduser(os.environ.get('BENCH_DEPS') or c.get('deps', '~/llm-bench-deps'))),
+        'deps': _optional_path(os.environ.get('BENCH_DEPS') or c.get('deps')),
         'agent_workdir': c.get('agent_workdir', '.'),
+        'module': c.get('module'),
         'reset_keep': reset.get('keep', []),
         'reset_after': os.path.join(base, reset['after']) if reset.get('after') else None,
+        'run_dirs': c.get('agent', {}).get('run_dirs', {}),
+        'run_create': c.get('agent', {}).get('create', []),
     }
 
 
@@ -93,12 +105,39 @@ def task_module(task, path=None):
     return _modules[key]
 
 
+def module(path=None):
+    """The task set's own module (taskset.toml: module), or None."""
+    name = config(path)['module']
+    if not name:
+        return None
+    if lib_dir(path) not in sys.path:
+        sys.path.insert(0, lib_dir(path))
+    return importlib.import_module(name)  # the same module the task's grade.py files import
+
+
+def grader_class(path=None):
+    """The task set's Grader, or the generic one."""
+    return getattr(module(path), 'Grader', checks.Grader)
+
+
+def rule_breaks(path=None):
+    return getattr(module(path), 'RULE_BREAKS', None)
+
+
+def build_keys(path=None):
+    return getattr(module(path), 'BUILD_KEYS', None)
+
+
 def shell_env(path=None):
     """Shell assignments for the bash scripts."""
     c = config(path)
     values = {'TASKSET': c['root'], 'TASKSET_NAME': c['name'], 'TASKSET_IMAGE': c['image'],
               'TASKSET_WORKSPACE': c['workspace'], 'TASKSET_DEPS': c['deps'], 'TASKSET_AGENT_WORKDIR': c['agent_workdir']}
-    return '\n'.join(f'{k}={shlex.quote(v)}' for k, v in values.items())
+    lines = [f'{k}={shlex.quote(v)}' for k, v in values.items()]
+    # bash arrays: container path=run folder, and folders to create
+    lines.append('TASKSET_RUN_DIRS=(' + ' '.join(shlex.quote(f'{k}={v}') for k, v in c['run_dirs'].items()) + ')')
+    lines.append('TASKSET_RUN_CREATE=(' + ' '.join(shlex.quote(d) for d in c['run_create']) + ')')
+    return '\n'.join(lines)
 
 
 if __name__ == '__main__':

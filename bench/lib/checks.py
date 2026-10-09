@@ -1,14 +1,17 @@
-"""Shared grading checks. A task's grade.py gets a Grader and calls the checks it needs:
+"""Generic grading checks. A task's grade.py gets a Grader and calls the checks it needs:
 
     def grade(g):
-        g.record_diff(); g.diff_check(); g.comment_dashes()
-        g.pc_compile('compile_ok')
+        g.record_diff(); g.diff_check()
+        g.scope_check(r'^src/')
+        g.command('hidden_test_ok', ['python3', '-m', 'pytest', '-q', g.hidden('test_hidden.py')])
 
 Every check stores its result in g.r under the key it is given (or a fixed one, see each method) and may
 write evidence files to g.out. bench/grade.py writes g.r as <out>/auto.json at the end.
-Programs (git, ant, java, javac, jest, tsc) are run directly; all text processing happens here.
+Programs (git, java, pytest, ...) are run directly; all text processing happens here.
+
+A task set can subclass Grader in its own lib/ module (taskset.toml: module) to add checks for its code
+base and rules, and set the class attributes below.
 """
-import datetime
 import importlib.util
 import json
 import locale
@@ -19,19 +22,8 @@ import subprocess
 import tempfile
 
 LIB = os.path.dirname(os.path.abspath(__file__))
-JAVA_HOME = '/usr/lib/jvm/java-17-openjdk-amd64'
-JAVA = os.path.join(JAVA_HOME, 'bin', 'java')
-JAVAC = os.path.join(JAVA_HOME, 'bin', 'javac')
+# A JUnit Platform launcher: compiles with the tests and runs the given classes (see Grader.junit)
 RUN_TESTS = os.path.join(LIB, 'RunTests.java')
-FAKE_REPO = os.path.join(LIB, 'java', 'FakeRepository.java')
-
-# AGENTS.md: no dashes as punctuation in comments. Copyright lines are exempt: "2016 - 2026" is the prescribed format.
-COMMENT_DASH = r'(//|<!--|/\*|^\+\s*\*|<#--).*( - |—|–)'
-COPYRIGHT_LINE = r'(\(c\)|©|@author)'
-# AGENTS.md: no issue numbers in identifiers
-NUMBERED_IDENTIFIER = r'\b[A-Za-z_]+[0-9]{3,}[A-Za-z_]*\b'
-NOT_AN_ISSUE_NUMBER = r'^(v[0-9]|UTF)'
-COMMENT_LINE = r'^\+\s*(//|\*|/\*)'
 
 
 # Text from git and from the workspace may not be UTF-8 (legacy Latin-1 sources). surrogateescape keeps every
@@ -102,6 +94,13 @@ def jest_summary(log_text):
 
 
 class Grader:
+    # An added line that is a comment, for count_added (C-like languages by default)
+    COMMENT_LINE = r'^\+\s*(//|\*|/\*)'
+    # core.whitespace for diff_check, None for git's default
+    DIFF_CHECK_WHITESPACE = None
+    # JDK for junit (and exported for build tools); None uses java and javac from PATH
+    JAVA_HOME = None
+
     def __init__(self, task_dir, out, ws, base, run_dir=None, with_ng=False):
         self.task_dir, self.out, self.ws, self.base = task_dir, out, ws, base
         self.run_dir = run_dir or os.path.dirname(os.path.abspath(out))
@@ -109,7 +108,11 @@ class Grader:
         self.r = {}
         self.changed = []
         os.makedirs(out, exist_ok=True)
-        os.environ['JAVA_HOME'] = JAVA_HOME  # ant picks the JDK from it
+        if self.JAVA_HOME:
+            os.environ['JAVA_HOME'] = self.JAVA_HOME  # build tools like ant pick the JDK from it
+
+    def java_tool(self, name):
+        return os.path.join(self.JAVA_HOME, 'bin', name) if self.JAVA_HOME else name
 
     # Helpers
 
@@ -160,7 +163,7 @@ class Grader:
     def added_code_lines(self, path_regex):
         """Added lines in files matching path_regex, without comment lines and lines starting '++'."""
         lines = [l for l in self.added_lines(path_regex) if len(l) > 1 and l[1] != '+']
-        return grep_v(COMMENT_LINE, lines)
+        return grep_v(self.COMMENT_LINE, lines)
 
     def changed_matching(self, pattern):
         return any(re.search(pattern, f) for f in self.changed)
@@ -211,30 +214,21 @@ class Grader:
         self.changed = lines_of(names)
         self.r['changed_files'] = self.write('changed-files.txt', self.changed)
 
-    def diff_check(self, whitespace='-space-before-tab,cr-at-eol', include_untracked=True):
-        """git diff --check: trailing whitespace and the like. Legacy space before tab indentation is ignored."""
+    def diff_check(self, whitespace=None, include_untracked=True):
+        """git diff --check: trailing whitespace and the like, with core.whitespace from the argument or
+        DIFF_CHECK_WHITESPACE."""
+        whitespace = whitespace or self.DIFF_CHECK_WHITESPACE
         env, tmp = self.scratch_git()
         if include_untracked:
             self.git('add', '-A', '-N', '.', env=env)
-        ok = self.run(['git', '-c', f'core.whitespace={whitespace}', 'diff', '--check', self.base], 'diff-check.txt',
-                      env=env)
+        settings = ['-c', f'core.whitespace={whitespace}'] if whitespace else []
+        ok = self.run(['git', *settings, 'diff', '--check', self.base], 'diff-check.txt', env=env)
         shutil.rmtree(tmp)
         self.r['diff_check_clean'] = ok
-
-    def comment_dashes(self, pattern=COMMENT_DASH):
-        """Added comment lines with ' - ', an en or an em dash: comment-dashes.txt and comment_dash_lines."""
-        added = [l for l in self.added_lines() if not l.startswith('+++')]
-        hits = grep_v(COPYRIGHT_LINE, grep(pattern, added))
-        self.r['comment_dash_lines'] = self.write('comment-dashes.txt', hits)
 
     def scope_check(self, allowed):
         """Changed files outside the allowed regex: out-of-scope.txt and out_of_scope_files."""
         self.r['out_of_scope_files'] = self.write('out-of-scope.txt', grep_v(allowed, self.changed))
-
-    def copyright_year(self, key, rel, year=None):
-        """The file's copyright range ends with this year (AGENTS.md: bump it when touching a file)."""
-        year = year or datetime.date.today().year
-        self.r[key] = re.search(rf'(\(c\)|©) *[0-9]{{4}} *- *{year}', read_text(self.path(rel))) is not None
 
     @staticmethod
     def _all_crlf(path):
@@ -261,74 +255,33 @@ class Grader:
         """Added lines outside comments that match a pattern, in files matching path_regex."""
         self.r[key] = len(grep(pattern, self.added_code_lines(path_regex)))
 
-    def numbered_identifiers(self, new_since=None):
-        """Identifiers with 3+ digit numbers in added lines: numbered-identifiers.txt and numbered_identifiers.
-        With new_since (a tag), identifiers that already existed in pc/source at that tag are left out."""
-        ids = set()
-        for line in self.added_lines():
-            ids.update(m.group(0) for m in re.finditer(NUMBERED_IDENTIFIER, line))
-        ids = sorted(i for i in ids if not re.search(NOT_AN_ISSUE_NUMBER, i))
-        if new_since:
-            ids = [i for i in ids if not self.git_ok('grep', '-qw', i, new_since, '--', 'pc/source')]
-        self.r['numbered_identifiers'] = self.write('numbered-identifiers.txt', ids)
-
-    def wrote_tests(self, prefix='pc/test/'):
+    def wrote_tests(self, prefix):
         """agent_wrote_tests: the agent added or changed something under the test folder."""
         self.r['agent_wrote_tests'] = any(f.startswith(prefix) for f in self.changed)
 
     # Builds and tests
 
-    def pc_compile(self, key):
-        """Clean compile of the pc slice. A clean build, because ant can skip a source edited right after a build."""
-        self.r[key] = self.run(['ant', 'clean', 'compile', '-DcleanServerSrcCopies=true'], 'compile.log',
-                               cwd=self.path('pc'))
-
-    def pc_classpath(self, relative=False):
-        root = 'pc' if relative else self.path('pc')
-        lib = self.path('pc/commons-lib')
-        jars = locale_sorted(f for f in os.listdir(lib) if f.endswith('.jar')) if os.path.isdir(lib) else []
-        return ':'.join([os.path.join(root, 'classes')] + [os.path.join(root, 'commons-lib', j) for j in jars])
-
-    def junit(self, key, test_files, classes, log=None, summary_key=None, java_props=(), relative_cp=False):
-        """Compiles test files with RunTests against pc/classes and runs the given classes. Sets key and
-        key_summary. relative_cp gives a classpath relative to the workspace (which is the working folder)."""
+    def command(self, key, cmd, cwd=None, log=None, summary=None, timeout=None):
+        """Runs a program (a build, a test suite) and sets key to whether it exited 0. Output goes to
+        <out>/<key>.log; with summary (a regex), the last matching line goes to key_summary."""
         log = log or f'{key}.log'
-        cp = self.pc_classpath(relative_cp)
+        self.r[key] = self.run(cmd, log, cwd=cwd, timeout=timeout)
+        if summary:
+            self.r[f'{key}_summary'] = last_match(summary, read_text(os.path.join(self.out, log)))
+
+    def junit(self, key, test_files, classes, classpath, log=None, summary_key=None, java_props=()):
+        """Compiles test files with RunTests against a classpath and runs the given classes. Sets key and
+        key_summary (RunTests' 'TESTS found=.. ok=.. fail=..' line)."""
+        log = log or f'{key}.log'
         tmp = tempfile.mkdtemp()
         try:
-            ok = self.run([JAVAC, '-cp', cp, '-d', tmp, RUN_TESTS, *test_files], log) and \
-                self.run([JAVA, *java_props, '-cp', f'{tmp}:{cp}', 'RunTests', *classes], log, append=True)
+            ok = self.run([self.java_tool('javac'), '-cp', classpath, '-d', tmp, RUN_TESTS, *test_files], log) and \
+                self.run([self.java_tool('java'), *java_props, '-cp', f'{tmp}:{classpath}', 'RunTests', *classes], log,
+                         append=True)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         self.r[key] = ok
         self.r[summary_key or f'{key}_summary'] = tests_summary(read_text(os.path.join(self.out, log)))
-
-    def ts_dir(self):
-        return self.path('the app/TypeScript')
-
-    def ts_typecheck(self, key):
-        """Type check over the whole TypeScript tsconfig."""
-        self.r[key] = self.run(['./node_modules/.bin/tsc', '--noEmit'], f'{key}.log', cwd=self.ts_dir())
-
-    def ts_jest_all(self, key):
-        """The TypeScript Jest suite as the agent left it, its own tests included."""
-        self.r[key] = self.run(['./node_modules/.bin/jest', '--config=jest.config.js', '--silent'], f'{key}.log',
-                               cwd=self.ts_dir())
-        self.r[f'{key}_summary'] = jest_summary(read_text(os.path.join(self.out, f'{key}.log')))
-
-    def hidden_jest(self, key, files):
-        """Hidden Jest tests, run from inside TypeScript/tests (relative imports need that) and removed after."""
-        names = []
-        for f in files:
-            shutil.copy(f, os.path.join(self.ts_dir(), 'tests'))
-            names.append('tests/' + os.path.basename(f))
-        try:
-            self.r[key] = self.run(['./node_modules/.bin/jest', '--config=jest.config.js', '--silent', '--verbose',
-                                    *names], f'{key}.log', cwd=self.ts_dir())
-        finally:
-            for n in names:
-                os.remove(os.path.join(self.ts_dir(), n))
-        self.r[f'{key}_summary'] = jest_summary(read_text(os.path.join(self.out, f'{key}.log')))
 
     def emit(self):
         """Writes auto.json, keys sorted, and returns its text."""

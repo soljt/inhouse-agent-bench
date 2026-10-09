@@ -35,8 +35,8 @@ def task_env(task_dir):
 
 def grade(task, out, ws, with_ng=False):
     task_dir = taskset.task_dir(task)
-    g = checks.Grader(task_dir, os.path.abspath(out), os.path.abspath(ws), task_env(task_dir)['BASE_TAG'],
-                      with_ng=with_ng)
+    grader = taskset.grader_class()
+    g = grader(task_dir, os.path.abspath(out), os.path.abspath(ws), task_env(task_dir)['BASE_TAG'], with_ng=with_ng)
     taskset.task_module(task).grade(g)
     return g.emit()
 

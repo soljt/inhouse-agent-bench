@@ -53,8 +53,8 @@ def score(run_dir):
     auto_path = os.path.join(run_dir, 'grade', 'auto.json')
     a = json.load(open(auto_path)) if os.path.exists(auto_path) else {}
     hooks = taskset.task_module(task, m.get('taskset'))
-    suggested, broken = rubric.suggest(hooks, a)
-    gate = rubric.gates(hooks, a)
+    suggested, broken = rubric.suggest(hooks, a, taskset.rule_breaks(m.get('taskset')))
+    gate = rubric.gates(hooks, a, taskset.build_keys(m.get('taskset')))
     h = load_human(run_dir) or {}
     gate['no_harm'] = h.get('no_harm', True) is not False
     gate['passed'] = bool(a) and all(gate.values())

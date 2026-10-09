@@ -26,7 +26,7 @@ def mounts(ws, ro=(), rw=()):
     """docker -v arguments for the workspace, the deps, the shared .git and any extra paths."""
     ws = os.path.abspath(ws)
     deps = taskset.config()['deps']
-    out = ['-v', f'{ws}:{ws}', '-v', f'{deps}:{deps}:ro']
+    out = ['-v', f'{ws}:{ws}'] + (['-v', f'{deps}:{deps}:ro'] if deps else [])
     common = os.path.abspath(git_dir(ws))
     if not common.startswith(ws + os.sep):
         out += ['-v', f'{common}:{common}:ro']
