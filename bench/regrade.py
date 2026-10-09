@@ -6,6 +6,7 @@ Usage: bench/regrade.py <run-dir> [<run-dir> ...] [--workspace <dir>]
 For each run: reset the workspace to the task's base tag, apply the run's grade/diff.patch, grade, and
 rescore. The previous auto.json is kept as grade/auto.prev.json; human.json is left alone.
 The workspace (default ~/llm-bench) is reset, so it refuses to run while a benchmark container is up.
+Grading runs in the sandbox, like after a run (see grade.py); git on the host runs without hooks.
 T2 cannot be regraded this way: its result lives in git remotes and the registry, not in a diff.
 """
 import json
@@ -17,8 +18,11 @@ import tempfile
 
 BENCH = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BENCH)
+import gitguard  # noqa: E402
 import grade as grader  # noqa: E402
 import score as scorer  # noqa: E402
+
+HOST_GIT = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
 
 NOT_FROM_A_DIFF = {'e1-word-count'}
 
@@ -39,6 +43,8 @@ def regrade(run_dir, ws):
         return 'no grade/diff.patch'
     task_dir = os.path.join(BENCH, 'tasks', task)
     base = grader.task_env(task_dir)['BASE_TAG']
+    if gitguard.check(ws, before=True):
+        return 'the workspace .git changed, see the gitguard message above'
     subprocess.run([os.path.join(BENCH, 'reset.sh'), base, ws], check=True, stdout=subprocess.DEVNULL)
     prepare = os.path.join(task_dir, 'prepare.sh')
     if os.path.exists(prepare):
@@ -47,14 +53,16 @@ def regrade(run_dir, ws):
     if os.path.getsize(patch):
         tmp = tempfile.NamedTemporaryFile(suffix='.patch', delete=False)
         shutil.copyfile(patch, tmp.name)
-        res = subprocess.run(['git', 'apply', '--whitespace=nowarn', tmp.name], cwd=ws, capture_output=True, text=True)
+        res = subprocess.run([*HOST_GIT, 'apply', '--whitespace=nowarn', tmp.name], cwd=ws, capture_output=True, text=True)
         os.unlink(tmp.name)
         if res.returncode:
             return 'diff does not apply: ' + res.stderr.strip()
     auto = os.path.join(gdir, 'auto.json')
     if os.path.exists(auto):
         shutil.copyfile(auto, os.path.join(gdir, 'auto.prev.json'))
-    grader.grade(task, gdir, ws, with_ng=bool(os.environ.get('GRADE_WITH_NG')))
+    grader.grade_in_sandbox(task, gdir, ws, with_ng=bool(os.environ.get('GRADE_WITH_NG')), stdout=subprocess.DEVNULL)
+    if gitguard.check(ws, run_dir=run_dir):
+        print(f'{run_dir}: grading changed the workspace .git; restored, evidence in {run_dir}/gitguard')
     return None
 
 

@@ -22,7 +22,7 @@ mkdir -p "$LOAD"
 for i in $(seq 1 "$max"); do
   w="$LOAD/w$i"
   if [ ! -e "$w/.git" ]; then
-    git -C "$MAIN" worktree add -q --detach "$w" "$BASE_TAG"
+    git -C "$MAIN" -c core.hooksPath=/dev/null -c core.fsmonitor=false worktree add -q --detach "$w" "$BASE_TAG"
     ln -sfn "$DEPS/angular/node_modules" "$w/the app/angular/node_modules"
     ln -sfn "$DEPS/TypeScript/node_modules" "$w/the app/TypeScript/node_modules"
   fi

@@ -134,9 +134,9 @@ class Grader:
                 f.write(f'\n(timed out after {timeout} s)\n')
                 return False
 
-    def git(self, *args, repo=None, stderr=False):
+    def git(self, *args, repo=None, stderr=False, env=None):
         """Runs git in the workspace (or another repo) and returns its output, with stderr when asked."""
-        res = subprocess.run(['git', '-C', repo or self.ws, *args], capture_output=True)
+        res = subprocess.run(['git', '-C', repo or self.ws, *args], capture_output=True, env=env)
         return (res.stdout + (res.stderr if stderr else b'')).decode(**ENC)
 
     def git_ok(self, *args, repo=None):
@@ -185,23 +185,40 @@ class Grader:
 
     # Diff and procedure
 
+    def scratch_git(self):
+        """Environment for git with a temporary index and object folder, and that temp folder (remove it after).
+        git add -N writes both; this way grading never changes the workspace's .git, which is read only in
+        the sandbox when the workspace is a worktree. The real objects stay readable as an alternate."""
+        def git_path(name):
+            p = self.git('rev-parse', '--git-path', name).strip()
+            return p if os.path.isabs(p) else os.path.join(self.ws, p)
+        tmp = tempfile.mkdtemp()
+        if os.path.exists(git_path('index')):
+            shutil.copyfile(git_path('index'), os.path.join(tmp, 'index'))
+        os.makedirs(os.path.join(tmp, 'objects'))
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, 'index'),
+                   GIT_OBJECT_DIRECTORY=os.path.join(tmp, 'objects'), GIT_ALTERNATE_OBJECT_DIRECTORIES=git_path('objects'))
+        return env, tmp
+
     def record_diff(self):
         """The agent's changes against the base tag, new files included: diff.patch, changed-files.txt."""
-        self.git('add', '-A', '-N', '.')
-        patch = self.git('diff', self.base)
-        names = self.git('diff', '--name-only', self.base)
-        self.git('reset', '-q')
+        env, tmp = self.scratch_git()
+        self.git('add', '-A', '-N', '.', env=env)
+        patch = self.git('diff', self.base, env=env)
+        names = self.git('diff', '--name-only', self.base, env=env)
+        shutil.rmtree(tmp)
         write_text(os.path.join(self.out, 'diff.patch'), patch)
         self.changed = lines_of(names)
         self.r['changed_files'] = self.write('changed-files.txt', self.changed)
 
     def diff_check(self, whitespace='-space-before-tab,cr-at-eol', include_untracked=True):
         """git diff --check: trailing whitespace and the like. Legacy space before tab indentation is ignored."""
+        env, tmp = self.scratch_git()
         if include_untracked:
-            self.git('add', '-A', '-N', '.')
-        ok = self.run(['git', '-c', f'core.whitespace={whitespace}', 'diff', '--check', self.base], 'diff-check.txt')
-        if include_untracked:
-            self.git('reset', '-q')
+            self.git('add', '-A', '-N', '.', env=env)
+        ok = self.run(['git', '-c', f'core.whitespace={whitespace}', 'diff', '--check', self.base], 'diff-check.txt',
+                      env=env)
+        shutil.rmtree(tmp)
         self.r['diff_check_clean'] = ok
 
     def comment_dashes(self, pattern=COMMENT_DASH):

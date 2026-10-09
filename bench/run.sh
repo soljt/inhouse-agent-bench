@@ -15,7 +15,8 @@ TASK="$BENCH/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task" >&2; exit 2;
 set -a; . "${BENCH_ENV:-$REPO/.env}"; . "$TASK/task.env"; set +a
 RESULTS="${BENCH_RESULTS:-$BENCH/results}"
 
-RUN_NET=(--add-host host.docker.internal:host-gateway -v "$DEPS:$DEPS")
+# The deps are shared by every run, so read-only: an agent cannot change what later runs (or grading) execute
+RUN_NET=(--add-host host.docker.internal:host-gateway -v "$DEPS:$DEPS:ro")
 
 # The container must have no direct internet. Abort rather than run unconfined.
 code=$(docker run --rm "${RUN_NET[@]}" --entrypoint curl llm-bench -s -o /dev/null -w '%{http_code}' --max-time 8 https://github.com || true)
@@ -56,6 +57,8 @@ AGENT_HOME="${AGENT_HOME:-/home/agent}"
 # BENCH_RUN_SUFFIX keeps concurrent runs (bench/load.sh) that start in the same second apart
 RUN="$RESULTS/$task/$harness-$target-${model//\//_}-$(date +%y%m%d_%H%M%S)${BENCH_RUN_SUFFIX:+-$BENCH_RUN_SUFFIX}"
 mkdir -p "$RUN/home"; cp "$TASK/prompt.md" "$RUN/prompt.md"
+# Refuse to start on a workspace whose .git hooks or config changed since the last run (see gitguard.py)
+python3 "$BENCH/gitguard.py" check "$WS" --before || exit 3
 "$BENCH/reset.sh" "$BASE_TAG" "$WS"
 [ -x "$TASK/prepare.sh" ] && "$TASK/prepare.sh" "$WS"
 mkdir -p "$RUN/tomcat/lib"
@@ -96,7 +99,11 @@ if [ ${#tty[@]} -eq 0 ]; then docker_run 2>&1 | tee "$RUN/console.log" || true; 
 
 echo "end=$(date -Is)" >> "$RUN/meta.txt"
 [ -n "$registry_pid" ] && kill "$registry_pid" 2>/dev/null
+guard() { python3 "$BENCH/gitguard.py" check "$WS" --run "$RUN" || echo "!! $1 changed the workspace's .git hooks or config; restored, evidence in $RUN/gitguard" >&2; }
+guard "the agent"
+# Grading runs the agent's build files and tests, in a throwaway container without network (sandbox.py)
 python3 "$BENCH/grade.py" "$task" "$RUN/grade" "$WS" ${GRADE_WITH_NG:+--with-ng} || true
+guard "grading"
 python3 "$BENCH/score.py" "$RUN" || true
 echo "Run saved in $RUN. Transcript: $RUN/home (OpenCode: .local/share/opencode, Codex: .codex/sessions)"
 echo "Grade it: bench/review.py $RUN   (or later: bench/review.py next)"
