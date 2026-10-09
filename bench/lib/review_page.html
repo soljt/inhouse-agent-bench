@@ -1,10 +1,11 @@
 <!doctype html>
-<!-- Review page for one bench run. bench/review.py fills DATA and opens a copy in the browser. -->
+<!-- Review page for one bench run. bench/review.py serves it with DATA filled in and saves the grade form. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bench review</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html@3/bundles/css/diff2html.min.css">
 <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
@@ -42,6 +43,18 @@
   summary { cursor: pointer; font-family: ui-monospace, monospace; font-size: 13px; }
   .toggle { float: right; font-size: 13px; }
   .d2h-wrapper { font-size: 13px; }
+  form.grade { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; align-items: center; max-width: 900px; }
+  form.grade label { color: var(--muted); font-size: 14px; }
+  form.grade .hint { color: var(--muted); font-size: 13px; margin-left: 8px; }
+  form.grade select, form.grade input[type=text], form.grade textarea {
+    font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  form.grade input[type=text], form.grade textarea { width: 100%; }
+  form.grade textarea { min-height: 90px; }
+  .buttons { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; margin-top: 8px; }
+  .buttons button { font: inherit; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer;
+                    background: var(--card); color: var(--fg); }
+  .buttons button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #status { font-size: 14px; }
 </style>
 </head>
 <body>
@@ -112,6 +125,76 @@ const render = {
   },
 };
 
+// Grade form: posts to the review server, which writes grade/human.json
+function gradeForm(f) {
+  const box = el('section');
+  box.id = 'grade';
+  box.append(el('h2', '', 'Grade'));
+  const form = el('form', 'grade');
+  const row = (label, input, hint) => {
+    const l = el('label', '', label);
+    const cell = el('div');
+    cell.append(input);
+    if (hint) cell.append(el('span', 'hint', hint));
+    form.append(l, cell);
+  };
+  const select = (options, value) => {
+    const s = el('select');
+    for (const [v, text] of options) {
+      const o = el('option', '', text);
+      o.value = v;
+      o.selected = v === (value === null || value === undefined ? '' : String(value));
+      s.append(o);
+    }
+    return s;
+  };
+  const scores = {};
+  for (const d of f.dims) {
+    const keep = d.auto === null ? 'not scored' : `keep auto (${d.auto})`;
+    scores[d.name] = select([['', keep], ['0', '0'], ['1', '1'], ['2', '2'], ['3', '3']], d.value);
+    row(d.name, scores[d.name], d.auto === null ? 'needs you' : '');
+  }
+  const tag = select([['', 'none']].concat(f.failure_tags.map(t => [t, t])), f.failure_tag);
+  row('failure tag', tag, f.failure_tag_suggested ? `suggested: ${f.failure_tag_suggested}` : '');
+  const check = value => { const c = el('input'); c.type = 'checkbox'; c.checked = value; return c; };
+  const noHarm = check(f.no_harm);
+  row('no harm', noHarm, 'untick if the run did damage (a gate)');
+  const exclude = check(f.exclude);
+  row('exclude', exclude, 'drop this run from review and the report');
+  const intervention = el('input'); intervention.type = 'text'; intervention.value = f.intervention;
+  row('intervention', intervention);
+  const notes = el('textarea'); notes.value = f.notes;
+  row('notes', notes);
+
+  const status = el('span'); status.id = 'status';
+  const save = async goNext => {
+    const body = {
+      scores: Object.fromEntries(Object.entries(scores).map(([k, s]) => [k, s.value === '' ? null : Number(s.value)])),
+      failure_tag: tag.value || null, no_harm: noHarm.checked, exclude: exclude.checked,
+      intervention: intervention.value, notes: notes.value,
+    };
+    status.className = ''; status.textContent = 'saving...';
+    try {
+      const r = await fetch(f.save_url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify(body) });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.error || r.status);
+      status.className = 'ok'; status.textContent = 'saved: ' + res.summary;
+      if (goNext) location.href = res.next;
+    } catch (e) {
+      status.className = 'bad'; status.textContent = 'not saved: ' + e.message;
+    }
+  };
+  const btnNext = el('button', 'primary', 'Save and next'); btnNext.type = 'button'; btnNext.onclick = () => save(true);
+  const btnSave = el('button', '', 'Save'); btnSave.type = 'button'; btnSave.onclick = () => save(false);
+  const buttons = el('div', 'buttons');
+  buttons.append(btnNext, btnSave, el('span', 'hint', 'Ctrl+Enter saves and moves on'), status);
+  form.append(buttons);
+  form.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(true); } };
+  box.append(form);
+  return box;
+}
+
 data.sections.forEach((s, i) => {
   const box = el('section');
   box.id = 's' + i;
@@ -123,6 +206,13 @@ data.sections.forEach((s, i) => {
   a.href = '#s' + i;
   document.getElementById('nav').append(a);
 });
+if (data.form) {
+  main.append(gradeForm(data.form));
+  const a = el('a', '', 'Grade');
+  a.href = '#grade';
+  a.style.fontWeight = '600';
+  document.getElementById('nav').append(a);
+}
 </script>
 </body>
 </html>
