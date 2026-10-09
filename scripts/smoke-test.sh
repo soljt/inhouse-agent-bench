@@ -4,7 +4,7 @@
 # Usage: scripts/smoke-test.sh [local|dryrun]
 set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-[ -f "$REPO/.env" ] && { set -a; . "$REPO/.env"; set +a; }
+. "$REPO/scripts/env.sh" "$REPO/.env"
 
 if [ "${1:-local}" = dryrun ]; then
   base="https://api.openai.com/v1"; key="$OPENAI_API_KEY"; model="$DRYRUN_MODEL"

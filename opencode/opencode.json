@@ -10,7 +10,7 @@
   "autoupdate": false,
   "provider": {
     "local": {
-      "name": "private vLLM",
+      "name": "Self-hosted model (vLLM or other OpenAI-compatible server)",
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "{env:LOCAL_BASE_URL}",

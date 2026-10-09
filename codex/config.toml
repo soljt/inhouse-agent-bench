@@ -12,7 +12,7 @@ web_search = "disabled"
 enabled = false
 
 [model_providers.local]
-name = "private vLLM"
+name = "Self-hosted model (vLLM or other OpenAI-compatible server)"
 base_url = "http://localhost:8000/v1"  # overridden by LOCAL_BASE_URL in bin/cx
 env_key = "LOCAL_API_KEY"
 wire_api = "responses"
