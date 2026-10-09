@@ -1,0 +1,39 @@
+diff --git a/tests/test_slug.py b/tests/test_slug.py
+new file mode 100644
+index 0000000..df68f27
+--- /dev/null
++++ b/tests/test_slug.py
+@@ -0,0 +1,5 @@
++from textstats import slugify
++
++
++def test_slug():
++    assert slugify('  Hello,   World!  ') == 'hello-world'
+diff --git a/textstats/__init__.py b/textstats/__init__.py
+index 7c5ab63..306c56d 100644
+--- a/textstats/__init__.py
++++ b/textstats/__init__.py
+@@ -1,5 +1,6 @@
+ """Small text statistics."""
++from .slug import slugify
+ from .text import normalize_whitespace
+ from .words import word_count
+ 
+-__all__ = ['normalize_whitespace', 'word_count']
++__all__ = ['normalize_whitespace', 'slugify', 'word_count']
+diff --git a/textstats/slug.py b/textstats/slug.py
+new file mode 100644
+index 0000000..4ac69ab
+--- /dev/null
++++ b/textstats/slug.py
+@@ -0,0 +1,10 @@
++"""URL slugs."""
++import re
++
++from .text import normalize_whitespace
++
++
++def slugify(title: str) -> str:
++    """Lower case words of a-z and 0-9, joined by single hyphens."""
++    words = re.sub(r'[^a-z0-9]+', ' ', title.lower())
++    return normalize_whitespace(words).replace(' ', '-')

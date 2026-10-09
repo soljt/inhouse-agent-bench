@@ -1,0 +1,24 @@
+diff --git a/tests/test_words.py b/tests/test_words.py
+index 8f229a8..e520a5c 100644
+--- a/tests/test_words.py
++++ b/tests/test_words.py
+@@ -7,3 +7,7 @@ def test_counts_words():
+ 
+ def test_empty_text_has_no_words():
+     assert word_count('') == 0
++
++
++def test_any_whitespace_separates_words():
++    assert word_count('hello  world\t!\n') == 3
+diff --git a/textstats/words.py b/textstats/words.py
+index 9fb3371..a4d133e 100644
+--- a/textstats/words.py
++++ b/textstats/words.py
+@@ -3,6 +3,4 @@
+ 
+ def word_count(text: str) -> int:
+     """Number of words in text."""
+-    if not text:
+-        return 0
+-    return len(text.split(' '))
++    return len(text.split())

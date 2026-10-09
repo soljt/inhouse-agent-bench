@@ -10,7 +10,8 @@ harness="$1"; target="$2"; task="$3"
 # BENCH_ENV: another env file (e.g. a second model server); BENCH_RESULTS: another results folder
 # BENCH_VARIANT: a label for anything else that differs between runs (vLLM settings, harness version);
 # report.py keeps each label in its own row. BENCH_YOLO=1 auto-approves the TUI and is keyed the same way.
-set -a; . "${BENCH_ENV:-$REPO/.env}"; set +a
+. "$REPO/scripts/env.sh" "${BENCH_ENV:-$REPO/.env}"
+case "$target" in local|dryrun) ;; *) echo "target must be local or dryrun, not $target" >&2; exit 2 ;; esac
 # The task set (BENCH_TASKSET): its image, workspace, deps and the agent's start folder (see lib/taskset.py)
 eval "$(python3 "$BENCH/lib/taskset.py" env)"
 WS="$TASKSET_WORKSPACE"; DEPS="$TASKSET_DEPS"; IMAGE="$TASKSET_IMAGE"
@@ -23,7 +24,7 @@ RESULTS="${BENCH_RESULTS:-$BENCH/results}"
 # The deps are shared by every run, so read-only: an agent cannot change what later runs (or grading) execute.
 MODEL_PORT="${LOCAL_BASE_URL##*:}"; MODEL_PORT="${MODEL_PORT%%/*}"
 python3 "$BENCH/agentnet.py" ensure "$MODEL_PORT" "$PROXY_PORT" 8081
-RUN_NET=(--network bench-agents -v "$DEPS:$DEPS:ro")
+RUN_NET=(--network bench-agents); [ -n "$DEPS" ] && RUN_NET+=(-v "$DEPS:$DEPS:ro")
 
 # The container must have no direct internet and reach nothing on the host but the relayed ports. Abort rather than run unconfined.
 code=$(docker run --rm "${RUN_NET[@]}" --entrypoint curl "$IMAGE" -s -o /dev/null -w '%{http_code}' --max-time 8 https://github.com || true)
@@ -72,7 +73,10 @@ mkdir -p "$RUN/home"; cp "$TASK/prompt.md" "$RUN/prompt.md"
 python3 "$BENCH/gitguard.py" check "$WS" --before || exit 3
 python3 "$BENCH/reset.py" "$BASE_TAG" "$WS"
 [ -x "$TASK/prepare.sh" ] && "$TASK/prepare.sh" "$WS"
-mkdir -p "$RUN/tomcat/lib"
+# Run folders the task set mounts into the agent container (taskset.toml [agent] run_dirs, create)
+run_mounts=()
+for kv in "${TASKSET_RUN_DIRS[@]}"; do mkdir -p "$RUN/${kv#*=}"; run_mounts+=(-v "$RUN/${kv#*=}:${kv%%=*}"); done
+for d in "${TASKSET_RUN_CREATE[@]}"; do mkdir -p "$RUN/$d"; done
 printf '[user]\n\tname = Bench Agent\n\temail = agent@bench.example\n' > "$RUN/home/.gitconfig"
 registry_pid=""
 if [ "${NEEDS_REGISTRY:-0}" = 1 ]; then
@@ -100,7 +104,7 @@ docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]
   --cap-drop ALL --security-opt no-new-privileges \
   -v "$BENCH/container/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro" \
   --user "$(id -u):$(id -g)" -e HOME="$AGENT_HOME" -v "$RUN/home:$AGENT_HOME" \
-  -v "$WS:/work" -v "$RUN/prompt.md:/run/prompt.md:ro" -v "$RUN/tomcat:/usr/share/tomcat" \
+  -v "$WS:/work" -v "$RUN/prompt.md:/run/prompt.md:ro" "${run_mounts[@]}" \
   -v "$REPO/opencode:/harness/opencode:ro" -v "$REPO/codex:/harness/codex:ro" \
   -e HARNESS="$harness" -e PROMPT_FILE=/run/prompt.md -e AGENT_WORKDIR="$TASKSET_AGENT_WORKDIR" \
   -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e MODEL="$model" \

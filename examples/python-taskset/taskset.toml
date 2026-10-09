@@ -1,0 +1,10 @@
+# Example task set: a tiny Python package (textstats), tasks graded with pytest.
+# Setup: docker build --network host -t llm-bench-example container   (after building llm-bench-base)
+#        python3 make_workspace.py
+# Run:   BENCH_TASKSET=<this folder> bench/run.sh cx local e1-word-count
+name = "example-python"
+image = "llm-bench-example"
+workspace = "~/llm-bench-example"
+agent_workdir = "."
+# lib/example.py: a Grader with a pytest check, the repository's rules and build keys
+module = "example"

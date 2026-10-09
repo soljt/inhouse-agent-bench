@@ -1,0 +1,2 @@
+# Blank context lines in a patch are a single space by design
+*.patch -whitespace
