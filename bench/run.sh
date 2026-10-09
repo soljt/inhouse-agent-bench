@@ -15,12 +15,20 @@ TASK="$BENCH/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task" >&2; exit 2;
 set -a; . "${BENCH_ENV:-$REPO/.env}"; . "$TASK/task.env"; set +a
 RESULTS="${BENCH_RESULTS:-$BENCH/results}"
 
-# The deps are shared by every run, so read-only: an agent cannot change what later runs (or grading) execute
-RUN_NET=(--add-host host.docker.internal:host-gateway -v "$DEPS:$DEPS:ro")
+# Agents join bench-agents: no route out and no host address on it. Its only other member is bench-gateway,
+# called host.docker.internal there, which relays just these ports to the host (see agentnet.py).
+# The deps are shared by every run, so read-only: an agent cannot change what later runs (or grading) execute.
+MODEL_PORT="${LOCAL_BASE_URL##*:}"; MODEL_PORT="${MODEL_PORT%%/*}"
+python3 "$BENCH/agentnet.py" ensure "$MODEL_PORT" "$PROXY_PORT" 8081
+RUN_NET=(--network bench-agents -v "$DEPS:$DEPS:ro")
 
-# The container must have no direct internet. Abort rather than run unconfined.
+# The container must have no direct internet and reach nothing on the host but the relayed ports. Abort rather than run unconfined.
 code=$(docker run --rm "${RUN_NET[@]}" --entrypoint curl llm-bench -s -o /dev/null -w '%{http_code}' --max-time 8 https://github.com || true)
 [ "$code" = "000" ] || { echo "Container reached github.com directly (HTTP $code). Fix bridge egress first." >&2; exit 3; }
+if docker run --rm "${RUN_NET[@]}" --entrypoint bash llm-bench -c \
+     "timeout 3 bash -c 'exec 3<>/dev/tcp/host.docker.internal/22' || timeout 3 bash -c 'exec 3<>/dev/tcp/$BRIDGE_IP/22'" 2>/dev/null; then
+  echo "Container reached the host's ssh port. The agent network is not isolated (see agentnet.py)." >&2; exit 3
+fi
 
 proxy_env=()
 if [ "$target" = dryrun ]; then
@@ -37,7 +45,7 @@ else
   model="$LOCAL_MODEL"; profile=local
   base_url="${LOCAL_BASE_URL/localhost/host.docker.internal}"; base_url="${base_url/127.0.0.1/host.docker.internal}"
   # An SSH tunnel on localhost only is invisible to containers; forward the bridge port to it
-  tport="${LOCAL_BASE_URL##*:}"; tport="${tport%%/*}"
+  tport="$MODEL_PORT"
   if ! (exec 3<>/dev/tcp/$BRIDGE_IP/$tport) 2>/dev/null; then
     mkdir -p "$BENCH/results"
     nohup python3 "$BENCH/egress-proxy.py" --listen "$BRIDGE_IP:$tport" --forward "127.0.0.1:$tport" \
@@ -86,6 +94,7 @@ if [ -d "$TASK/turns" ] || [ "${BENCH_SCRIPTED:-0}" = 1 ]; then
   echo "scripted=1" >> "$RUN/meta.txt"
 fi
 docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]}" "${scripted[@]}" \
+  --cap-drop ALL --security-opt no-new-privileges \
   -v "$BENCH/container/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro" \
   --user "$(id -u):$(id -g)" -e HOME="$AGENT_HOME" -v "$RUN/home:$AGENT_HOME" \
   -v "$WS:/work" -v "$RUN/prompt.md:/run/prompt.md:ro" -v "$RUN/tomcat:/usr/share/tomcat" \

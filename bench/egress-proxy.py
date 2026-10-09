@@ -6,7 +6,10 @@ run record shows what the agent tried to reach. Binds to the Docker bridge IP on
 
 Usage: egress-proxy.py --listen 172.17.0.1:3128 --allow api.openai.com:443 [--log file]
        egress-proxy.py --listen 172.17.0.1:8000 --forward 127.0.0.1:8000 [--log file]
+       egress-proxy.py --relay-to host.docker.internal --relay 8000 --relay 3128 [--log file]
 The second form is a plain TCP forward, for an SSH tunnel that only listens on localhost.
+The third runs in the bench-gateway container (agentnet.py): every --relay port is listened on and
+forwarded to the same port on --relay-to, so agents reach exactly those ports of the host.
 """
 import argparse
 import asyncio
@@ -81,8 +84,18 @@ async def main():
     ap.add_argument("--listen", default="172.17.0.1:3128")
     ap.add_argument("--allow", action="append", default=[], help="host:port, repeatable")
     ap.add_argument("--forward", help="host:port; forward every connection there instead of proxying")
+    ap.add_argument("--relay", action="append", default=[], help="port, repeatable; needs --relay-to")
+    ap.add_argument("--relay-to", help="host every --relay port forwards to")
     ap.add_argument("--log")
     a = ap.parse_args()
+    if a.relay:
+        servers = []
+        for port in a.relay:
+            target = f"{a.relay_to}:{port}"
+            servers.append(await asyncio.start_server(lambda r, w, t=target: forward(r, w, t, a.log), "0.0.0.0", int(port)))
+            log(a.log, f"listening on 0.0.0.0:{port}, forward to {target}")
+        await asyncio.gather(*(s.serve_forever() for s in servers))
+        return
     host, port = a.listen.rsplit(":", 1)
     allow = set(a.allow)
     if a.forward:
