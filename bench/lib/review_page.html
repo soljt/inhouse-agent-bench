@@ -1,0 +1,128 @@
+<!doctype html>
+<!-- Review page for one bench run. bench/review.py fills DATA and opens a copy in the browser. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bench review</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html@3/bundles/css/diff2html.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/diff2html@3/bundles/js/diff2html-ui.min.js"></script>
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --fg: #1d2330; --muted: #5f6b7a; --line: #dde1e7;
+          --ok: #1a7f37; --bad: #cf222e; --code: #f0f2f5; --accent: #0969da; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1218; --card: #171b23; --fg: #e3e7ee; --muted: #94a0b1; --line: #2a303b;
+            --ok: #3fb950; --bad: #f85149; --code: #1f2430; --accent: #58a6ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 10; background: var(--card); border-bottom: 1px solid var(--line);
+           padding: 10px 16px; }
+  header h1 { margin: 0 0 6px; font-size: 16px; }
+  nav { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
+  nav a { color: var(--accent); text-decoration: none; }
+  main { max-width: 1600px; margin: 0 auto; padding: 16px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; scroll-margin-top: 90px;
+            padding: 12px 16px; }
+  section h2 { margin: 0 0 8px; font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .md { max-width: 900px; }
+  .md pre, pre.text { background: var(--code); padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+  .md code { background: var(--code); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
+  .md pre code { padding: 0; background: none; }
+  pre.text { white-space: pre-wrap; word-break: break-word; margin: 0; }
+  table.kv { border-collapse: collapse; font-size: 14px; }
+  table.kv td { border-top: 1px solid var(--line); padding: 3px 16px 3px 0; vertical-align: top; }
+  table.kv td:first-child { color: var(--muted); white-space: nowrap; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  details { border-top: 1px solid var(--line); padding: 4px 0; }
+  summary { cursor: pointer; font-family: ui-monospace, monospace; font-size: 13px; }
+  .toggle { float: right; font-size: 13px; }
+  .d2h-wrapper { font-size: 13px; }
+</style>
+</head>
+<body>
+<header><h1 id="title"></h1><nav id="nav"></nav></header>
+<main id="main"></main>
+<script type="application/json" id="data">/*DATA*/null</script>
+<script>
+const data = JSON.parse(document.getElementById('data').textContent);
+const main = document.getElementById('main');
+document.getElementById('title').textContent = data.header;
+document.title = data.header;
+
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+};
+// Agent output is untrusted, so rendered markdown goes through DOMPurify
+const markdown = src => DOMPurify.sanitize(marked.parse(src || ''));
+// Only gate results and warnings are coloured. A plain true or false in auto.json can be good or bad.
+const verdict = v => {
+  const s = String(v);
+  if (s === 'ok') return 'ok';
+  if (s === 'FAIL' || s.startsWith('WARNING')) return 'bad';
+  return '';
+};
+
+const render = {
+  md(body, box) { const d = el('div', 'md'); d.innerHTML = markdown(body); box.append(d); },
+  text(body, box) { box.append(el('pre', 'text', body || '(none)')); },
+  table(rows, box) {
+    const t = el('table', 'kv');
+    for (const [k, v] of rows) {
+      const tr = el('tr');
+      const val = v === null ? '-' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+      tr.append(el('td', verdict(k), k), el('td', verdict(val), val));
+      t.append(tr);
+    }
+    box.append(t);
+  },
+  logs(files, box) {
+    for (const [name, text] of files) {
+      const d = el('details');
+      d.append(el('summary', '', name), el('pre', 'text', text || '(empty)'));
+      box.append(d);
+    }
+  },
+  diff(patch, box, h2) {
+    if (!patch.trim()) { box.append(el('p', '', '(no changes)')); return; }
+    const target = el('div');
+    box.append(target);
+    let format = 'side-by-side';
+    const draw = () => {
+      new Diff2HtmlUI(target, patch, { drawFileList: true, fileListToggle: true, fileContentToggle: true,
+        matching: 'lines', outputFormat: format, highlight: false, colorScheme: 'auto' }).draw();
+    };
+    const btn = el('a', 'toggle', 'line by line');
+    btn.href = '#';
+    btn.onclick = e => {
+      e.preventDefault();
+      format = format === 'side-by-side' ? 'line-by-line' : 'side-by-side';
+      btn.textContent = format === 'side-by-side' ? 'line by line' : 'side by side';
+      draw();
+    };
+    h2.append(btn);
+    draw();
+  },
+};
+
+data.sections.forEach((s, i) => {
+  const box = el('section');
+  box.id = 's' + i;
+  const h2 = el('h2', '', s.title);
+  box.append(h2);
+  render[s.kind](s.body, box, h2);
+  main.append(box);
+  const a = el('a', '', s.title.replace(/ \(.*/, ''));
+  a.href = '#s' + i;
+  document.getElementById('nav').append(a);
+});
+</script>
+</body>
+</html>
