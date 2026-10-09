@@ -54,7 +54,11 @@ def pending():
 
 
 def blind_id(run_dir):
-    return hashlib.sha1(os.path.basename(run_dir).encode()).hexdigest()[:6]
+    """Short stable id for a run that does not reveal harness or model. Task and run folder, so two tasks
+    started in the same second still get different ids."""
+    run_dir = os.path.abspath(run_dir)
+    key = os.path.join(os.path.basename(os.path.dirname(run_dir)), os.path.basename(run_dir))
+    return hashlib.sha1(key.encode()).hexdigest()[:6]
 
 
 def read(path, limit=None):
@@ -97,7 +101,14 @@ def sections(run_dir, s, blind):
         out.append(('Planted defects', 'text', read(os.path.join(g, 'review-matched.txt'))))
         out.append(('Findings that matched no planted defect (false alarm, or a real find?)', 'text',
                     read(os.path.join(g, 'review-unmatched.txt')) or '(none)'))
-    out.append(('Diff', 'diff', read(os.path.join(g, 'diff.patch'), 2_000_000)))
+    # Most tasks record diff.patch. T2 has none: its changes are in several repos, one patch each.
+    patches = ['diff.patch'] if os.path.exists(os.path.join(g, 'diff.patch')) else \
+        sorted(os.path.basename(p) for p in glob.glob(os.path.join(g, '*.patch')))
+    for name in patches:
+        title = 'Diff' if name == 'diff.patch' else f'Diff: {name}'
+        out.append((title, 'diff', read(os.path.join(g, name), 2_000_000)))
+    if not patches:
+        out.append(('Diff', 'text', '(no diff recorded)'))
     logs = sorted(glob.glob(os.path.join(g, '*.log')) + glob.glob(os.path.join(g, '*.txt')))
     out.append(('Grader logs', 'logs', [(os.path.basename(f), read(f, 100_000)) for f in logs]))
     return out
