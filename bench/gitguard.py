@@ -12,7 +12,9 @@ next time git runs there (reset.py, load.sh). Host git calls already pass -c cor
 
 Guarded: hooks/ and info/attributes (exact), the config and each worktree's config.worktree (every key
 except harmless ones like branch.* and remote.*.url, which you change yourself when pushing from another
-worktree). The baseline is kept in ~/.local/state/llm-bench/gitguard/ and is created on the first check.
+worktree). Also the tags: every run resets to one, so a tag moved or deleted by an agent would change where
+later runs start. New tags are harmless (you add them for new tasks). The baseline is kept in
+~/.local/state/llm-bench/gitguard/ and is created on the first check.
 
 check: harmless drift updates the baseline. Any other difference:
   --before (start of a run): nothing is changed, exit 2. Look at it, then restore it or run accept.
@@ -92,6 +94,30 @@ def fingerprint(gdir):
     return out
 
 
+def tags(gdir):
+    """Tag name -> object id, read from packed-refs and refs/tags/ without running git (loose refs win)."""
+    out = {}
+    packed = os.path.join(gdir, 'packed-refs')
+    if os.path.isfile(packed):
+        for line in open(packed):
+            parts = line.split()
+            if len(parts) == 2 and parts[1].startswith('refs/tags/'):
+                out[parts[1].removeprefix('refs/tags/')] = parts[0]
+    loose = os.path.join(gdir, 'refs', 'tags')
+    for root, _, names in os.walk(loose):
+        for n in names:
+            path = os.path.join(root, n)
+            out[os.path.relpath(path, loose)] = open(path).read().strip()
+    return out
+
+
+def moved_tags(gdir):
+    """Baseline tags that now point elsewhere or are gone, as {name: (baseline id, current id or None)}."""
+    base = json.load(open(os.path.join(baseline_dir(gdir), 'baseline.json'))).get('tags', {})
+    now = tags(gdir)
+    return {t: (sha, now.get(t)) for t, sha in base.items() if now.get(t) != sha}
+
+
 def baseline_dir(gdir):
     return os.path.join(STATE, hashlib.sha256(os.path.abspath(gdir).encode()).hexdigest()[:16])
 
@@ -104,7 +130,7 @@ def save_baseline(gdir):
     for rel in guarded_files(gdir):
         os.makedirs(os.path.dirname(os.path.join(tmp, 'files', rel)), exist_ok=True)
         shutil.copy2(os.path.join(gdir, rel), os.path.join(tmp, 'files', rel))
-    json.dump({'git_dir': os.path.abspath(gdir), 'fingerprint': fingerprint(gdir)},
+    json.dump({'git_dir': os.path.abspath(gdir), 'fingerprint': fingerprint(gdir), 'tags': tags(gdir)},
               open(os.path.join(tmp, 'baseline.json'), 'w'), indent=1)
     # load.sh checks several worktrees of one repo at once; if another check saved first, keep that one
     try:
@@ -115,7 +141,9 @@ def save_baseline(gdir):
 
 
 def baseline_is_current(gdir):
-    """True when the stored copies match the guarded files byte for byte."""
+    """True when the stored copies match the guarded files byte for byte and the stored tags match."""
+    if json.load(open(os.path.join(baseline_dir(gdir), 'baseline.json'))).get('tags') != tags(gdir):
+        return False
     files = os.path.join(baseline_dir(gdir), 'files')
     stored = {os.path.relpath(os.path.join(r, n), files) for r, _, ns in os.walk(files) for n in ns}
     if stored != set(guarded_files(gdir)):
@@ -137,6 +165,11 @@ def restore_baseline(gdir):
     for rel in guarded_files(gdir):
         if rel not in kept:
             os.remove(os.path.join(gdir, rel))
+    # A loose ref overrides a packed one, so writing the file puts a moved or deleted tag back
+    for t, (sha, _) in moved_tags(gdir).items():
+        os.makedirs(os.path.dirname(os.path.join(gdir, 'refs', 'tags', t)), exist_ok=True)
+        with open(os.path.join(gdir, 'refs', 'tags', t), 'w') as f:
+            f.write(sha + '\n')
 
 
 def differences(gdir):
@@ -151,7 +184,8 @@ def check(ws, run_dir=None, before=False):
     if not os.path.exists(os.path.join(baseline_dir(gdir), 'baseline.json')):
         save_baseline(gdir)
         return 0
-    changed = differences(gdir)
+    moved = moved_tags(gdir)
+    changed = differences(gdir) + [f'refs/tags/{t}' for t in sorted(moved)]
     if not changed:
         if not baseline_is_current(gdir):
             save_baseline(gdir)  # take harmless drift (a new branch, a remote) into the baseline
@@ -163,7 +197,13 @@ def check(ws, run_dir=None, before=False):
         return 2
     if run_dir:
         evidence = os.path.join(run_dir, 'gitguard')
+        if moved:
+            os.makedirs(evidence, exist_ok=True)
+            with open(os.path.join(evidence, 'moved-tags.txt'), 'w') as f:
+                f.writelines(f'{t} {old} -> {new or "deleted"}\n' for t, (old, new) in sorted(moved.items()))
         for rel in changed:
+            if rel.startswith('refs/tags/'):
+                continue
             if os.path.exists(os.path.join(gdir, rel)):
                 os.makedirs(os.path.dirname(os.path.join(evidence, rel)), exist_ok=True)
                 shutil.copy2(os.path.join(gdir, rel), os.path.join(evidence, rel))

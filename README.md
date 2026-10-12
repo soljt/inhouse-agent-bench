@@ -219,8 +219,9 @@ The agent can change anything in its workspace, so nothing from the workspace ru
 - **Grading and the after-reset hook** run in `sandbox.py`: a throwaway container without network, with the
   workspace writable and everything else it needs read-only. The host only runs git and Python.
 - **Host git** in the workspace runs with hooks and fsmonitor disabled; `gitguard.py` compares the workspace's
-  `.git` hooks and config with a baseline before and after each run, restores it and marks the run
-  `git_tampered=1` if something changed.
+  `.git` hooks, config and tags with a baseline before and after each run, restores it and marks the run
+  `git_tampered=1` if something changed. A moved or deleted tag counts (every run starts from one); a new
+  tag does not.
 
 What is left: the containers share the host kernel (keep it patched), and the model forwarder and proxy see
 whatever the agent sends through them.
