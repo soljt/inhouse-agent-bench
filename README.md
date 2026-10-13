@@ -205,6 +205,9 @@ that, summarise the vLLM log of the same time window. The log uses the pod's clo
 ssh root@<pod-ip> -p <port> -i ~/.ssh/<key> cat /root/vllm.log | bench/vllm_stats.py --since <start> --until <end>
 ```
 
+`bench/report.html` shows the load tests as charts per concurrency level, every group in the same chart, so two
+models (or two server setups) compare at a glance.
+
 It prints the startup numbers (model memory and KV cache per GPU, maximum concurrency) and, from vLLM's
 10-second stats lines, a table per number of running requests: generation throughput in total and per
 request, prompt throughput, KV cache usage and the most requests waiting. Requests waiting means the server
@@ -218,7 +221,7 @@ bench/review.py next            # review pending runs one by one in the browser,
 bench/review.py next --blind    # same, harness and model hidden, random order
 bench/review.py pending         # list them
 bench/review.py <run> --pager   # terminal and $EDITOR instead of the browser
-bench/report.py                 # bench/results/report.md and report.csv
+bench/report.py                 # bench/results/report.html (open in a browser), report.md and report.csv
 bench/regrade.py <run>...       # grade finished runs again with the current grader, from their saved diff
 ```
 
