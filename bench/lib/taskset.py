@@ -18,7 +18,8 @@ BENCH_WORKSPACE and BENCH_DEPS override workspace and deps.
 
 A task's grade.py has grade(g) for the checks. It may also define how its checks map to the rubric
 (see rubric.py): behaviour(auto), correctness(auto), reuse(auto), procedure(auto, score, broken), plus
-review_sections(), REGRADE_FROM_DIFF, GRADER_FILES (files besides hidden/ the review page shows), AUTO_KEYS (what its auto.json keys mean) and RUBRIC_NOTES
+review_sections(), REGRADE_FROM_DIFF, GRADER_FILES (files besides hidden/ the review page shows), TEST_LOGS
+(key -> test log file) and BEHAVIOUR_TEST (the behaviour gate's test key), AUTO_KEYS (what its auto.json keys mean) and RUBRIC_NOTES
 (task specific grading notes per dimension).
 
 Usage: python3 bench/lib/taskset.py env    shell assignments for run.sh and load.sh

@@ -74,6 +74,12 @@
   table.tsv { border-collapse: collapse; font-size: 14px; width: 100%; }
   table.tsv th, table.tsv td { border-top: 1px solid var(--line); padding: 6px 12px 6px 0; vertical-align: top; text-align: left; }
   table.tsv th { color: var(--muted); font-size: 13px; }
+  /* Test results */
+  .testhead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .testhead:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+  .gatetag { font-size: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 0 8px; color: var(--muted); }
+  ol.failed { margin: 4px 0 0; padding-left: 24px; }
+  ol.failed li { margin: 6px 0; }
   /* Rubric */
   table.rubric { border-collapse: collapse; font-size: 14px; width: 100%; }
   table.rubric th, table.rubric td { border: 1px solid var(--line); padding: 6px 10px; vertical-align: top; text-align: left; }
@@ -213,6 +219,32 @@ const render = {
       t.append(tr);
     }
     box.append(t);
+  },
+  // Test runs the grader recorded: pass or fail, then each failed test with its error
+  tests(runs, box) {
+    for (const t of runs) {
+      const head = el('div', 'testhead');
+      head.append(el('b', t.ok === true ? 'ok' : t.ok === false ? 'bad' : '', t.ok === true ? 'passed' : t.ok === false ? 'FAILED' : show(t.ok)),
+                  el('code', '', t.key));
+      if (t.gate) head.append(el('span', 'gatetag', 'behaviour gate'));
+      if (t.meaning) head.append(el('span', 'muted', t.meaning));
+      box.append(head);
+      const r = t.result;
+      if (!r) { box.append(el('p', 'hint', `Could not read the results; see ${t.log} under Grader logs.`)); continue; }
+      const sum = el('p', 'hint', r.summary + (r.passed.length ? '. Passed: ' + r.passed.join('; ') : ''));
+      box.append(sum);
+      if (r.compile_errors) box.append(el('pre', 'code', r.compile_errors));
+      if (r.failed.length) {
+        const ol = el('ol', 'failed');
+        for (const f of r.failed) {
+          const li = el('li');
+          li.append(el('b', 'bad', f.name));
+          if (f.detail) li.append(el('pre', 'code', f.detail));
+          ol.append(li);
+        }
+        box.append(ol);
+      }
+    }
   },
   logs(files, box) {
     for (const [name, text] of files) {
@@ -470,7 +502,7 @@ function buildTests(p) {
 function buildRun(r, p) {
   const head = el('p', 'runhead');
   head.append(el('b', '', 'Run ' + r.label), document.createTextNode('  ' + r.header));
-  if (r.gate_failed.length) head.append(el('span', 'bad', '  gate failed: ' + r.gate_failed.join(', ')));
+  if (r.gate_failed.length) head.append(el('span', 'bad', '  gate failed: ' + r.gate_why.join('; ')));
   p.append(head);
   r.sections.forEach((s, i) => {
     const [box, h2] = section(p, `${r.id}-s${i}`, s.title, s.title.replace(/ \(.*/, ''));
@@ -517,7 +549,7 @@ function buildGrade(p) {
     for (const r of data.runs) { const td = el('td'); td.append(cell(r)); tr.append(td); }
     tbody.append(tr);
   };
-  addRow('gates', '', r => r.gate_failed.length ? el('span', 'bad', 'failed: ' + r.gate_failed.join(', ')) : el('span', 'ok', 'passed'));
+  addRow('gates', '', r => r.gate_failed.length ? el('span', 'bad', 'failed: ' + r.gate_why.join('; ')) : el('span', 'ok', 'passed'));
   for (const d of info.dims) addRow(d.name, d.question, r => scoreSelect(r, d.name));
   addRow('total', 'mean of the six (0 if a gate failed)', r => { const s = el('b'); summaryCells[r.id] = s; return s; });
   addRow('failure tag', '', r => tagSelect(r));

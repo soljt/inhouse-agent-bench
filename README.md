@@ -238,7 +238,9 @@ The review page is one page per task, with tabs:
   rule, with the code when the task has its own), then the task's `grade.py`, everything in its `hidden/`
   and any other file it names in `GRADER_FILES`, verbatim.
 - **Run A, B, ...**: one per run of the task, from every harness and model. The agent's final messages, gates
-  and suggested scores, the automatic checks (`auto.json`, with each key's good value and what it measures),
+  and suggested scores, the test results (each test run the grader recorded, with every failed test named
+  and its error, or the compile errors when the hidden tests did not compile; the header and the Grade tab
+  name the failed tests when the behaviour gate failed), the automatic checks (`auto.json`, with each key's good value and what it measures),
   telemetry, the commands it ran, the diff side by side, the grader logs and any sections the task adds
   (T12: its findings). Each tab ends with that run's grade form. Blind, the letters are shuffled and harness
   and model hidden.
@@ -308,6 +310,14 @@ test. `report.csv` has one row per run.
    the task set's `lib/`), list them in `GRADER_FILES` (paths relative to the task folder), so the Tests &
    gates tab shows them next to `grade.py` and `hidden/`:
    `GRADER_FILES = ['../e2-slugify/hidden/SharedFixture.java', '../../lib/java/FakeRepository.java']`.
+   The test results come from the logs of the test checks (`g.junit`, `g.command` with a summary, the task
+   set's own): a key `K` with a `K_summary` in `auto.json` and a `K.log` in `grade/`. JUnit (RunTests),
+   Jest `--verbose` and pytest output are understood (`bench/lib/testlogs.py`). If a log has another name,
+   map it in `TEST_LOGS = {'hidden_test_ok': 'hidden-test.log'}`; if the behaviour gate is not
+   `hidden_test_ok`, name its key in `BEHAVIOUR_TEST`.
+   Start `grade.py` with a docstring that says in plain words how a run is graded (each gate, what the
+   hidden tests check, how each suggestion is computed, what is left to the human): the Tests & gates tab
+   shows the file, and the reviewer reads that before the code. The private tasks have examples.
 8. Optionally add sections to the review page with `review_sections()`, a list of
    `(title, kind, file in grade/[, options])`. Kinds: `md`, `text`, `findings` (one `path:line: text` finding
    per line, shown as a numbered list with the location set apart), `tsv` (tab separated rows; options:

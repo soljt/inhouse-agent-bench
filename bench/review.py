@@ -44,6 +44,7 @@ import score as scorer  # noqa: E402
 sys.path.insert(0, os.path.join(BENCH, 'lib'))
 import rubric  # noqa: E402
 import taskset  # noqa: E402
+import testlogs  # noqa: E402
 import transcript  # noqa: E402
 
 RESULTS = os.environ.get('BENCH_RESULTS', os.path.join(BENCH, 'results'))
@@ -125,6 +126,41 @@ def auto_checks(run_dir, s):
     return rows
 
 
+def test_results(run_dir, s):
+    """The test runs the grader recorded, with what passed and failed: [{key, log, ok, gate, meaning, result}].
+    A key K with a K_summary in auto.json and a K.log in grade/ is a test run; a task's TEST_LOGS (key -> log
+    file) adds or renames ones. gate marks the behaviour gate's test run (BEHAVIOUR_TEST, default hidden_test_ok)."""
+    g = os.path.join(run_dir, 'grade')
+    path = os.path.join(g, 'auto.json')
+    auto = json.load(open(path)) if os.path.exists(path) else {}
+    hooks = taskset.task_module(s['task'], s.get('taskset'))
+    logs = {k: f'{k}.log' for k in auto if f'{k}_summary' in auto and os.path.exists(os.path.join(g, f'{k}.log'))}
+    logs.update(getattr(hooks, 'TEST_LOGS', {}))
+    gate_key = getattr(hooks, 'BEHAVIOUR_TEST', 'hidden_test_ok')
+    docs = taskset.auto_keys(s['task'], s.get('taskset'))
+    out = []
+    for key, log in logs.items():
+        if not os.path.exists(os.path.join(g, log)):
+            continue
+        out.append({'key': key, 'log': log, 'ok': auto.get(key), 'gate': key == gate_key,
+                    'meaning': docs.get(key, (None, ''))[1], 'result': testlogs.parse(read(os.path.join(g, log)))})
+    return sorted(out, key=lambda t: not t['gate'])
+
+
+def gate_failures(s, tests):
+    """Why the gates failed, one line each, naming the failed hidden tests where the log says."""
+    out = []
+    for gate in (k for k, v in s['gate'].items() if k != 'passed' and not v):
+        line = gate
+        t = next((t for t in tests if t['gate']), None) if gate == 'behaviour' else None
+        if t and t['result']:
+            r = t['result']
+            names = ', '.join(f['name'].split('.')[-1].removesuffix('()') for f in r['failed'][:4])
+            line += f": {r['summary']}" + (f' ({names}{", ..." if len(r["failed"]) > 4 else ""})' if names else '')
+        out.append(line)
+    return out
+
+
 GOOD_TEXT = {'high': 'higher', 'low': 'lower'}
 
 
@@ -155,6 +191,9 @@ def sections(run_dir, s, blind, with_prompt=True):
              ['suggested failure tag', s['failure_tag_suggested'] or 'none']]
     rows += [[f'suggested {d}', '-' if v['auto'] is None else v['auto']] for d, v in s['dims'].items()]
     out.append(('Gates and suggestions', 'table', rows, {}))
+    tests = test_results(run_dir, s)
+    if tests:
+        out.append(('Test results', 'tests', tests, {}))
     out.append(('Automatic checks (auto.json)', 'checks', auto_checks(run_dir, s), {}))
     t = s['telemetry']
     rows = [[k, v] for k, v in t.items() if not (blind and k in ('harness', 'model'))]
@@ -186,6 +225,15 @@ def as_text(kind, body):
     """A section body for the pager."""
     if kind == 'table':
         return '\n'.join(f'{k}: {v}' for k, v in body)
+    if kind == 'tests':
+        lines = []
+        for t in body:
+            r = t['result'] or {}
+            lines.append(f"{t['key']}{' (behaviour gate)' if t['gate'] else ''}: {r.get('summary', 'see ' + t['log'])}")
+            lines += [f"  failed {f['name']}: {f['detail'].splitlines()[0] if f['detail'] else ''}" for f in r.get('failed', [])]
+            if r.get('compile_errors'):
+                lines.append('  ' + r['compile_errors'].replace('\n', '\n  '))
+        return '\n'.join(lines)
     if kind == 'checks':
         return '\n'.join(f"{r['key']}: {r['value']}" + (f"  (good: {r['good']})" if r['good'] else '')
                          + (f"  {r['meaning']}" if r['meaning'] else '') for r in body)
@@ -293,10 +341,11 @@ def run_data(run_dir, s, blind, label):
     """One run for the page: its label, what it shows and its grade form."""
     h = human_grades(run_dir, s)
     gate_failed = [k for k, v in s['gate'].items() if k != 'passed' and not v]
+    why = gate_failures(s, test_results(run_dir, s))
     return {
         'id': blind_id(run_dir), 'label': label,
         'who': '' if blind else f"{s['harness']}/{s['model']}",
-        'header': header_line(run_dir, s, blind), 'gate_failed': gate_failed,
+        'header': header_line(run_dir, s, blind), 'gate_failed': gate_failed, 'gate_why': why,
         'sections': [{'title': t, 'kind': k, 'body': b, 'options': o}
                      for t, k, b, o in sections(run_dir, s, blind, with_prompt=False)],
         'form': {
