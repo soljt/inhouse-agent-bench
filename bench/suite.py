@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Run every task of the task set with each harness, unattended, one run after the other.
 
-Usage: bench/suite.py [--dry-run] [--harness oc,cx] [--target local] [--timeout-min 45] [task ...]
+Usage: bench/suite.py [--dry-run] [--runs N] [--harness oc,cx] [--target local] [--timeout-min 45] [task ...]
 
 Runs bench/run.sh with BENCH_SCRIPTED=1 for each task (all of the task set's, or the ones named) and harness.
-A task and harness that already have a graded run for the same target, model, task set, BENCH_VARIANT and
-BENCH_YOLO are skipped, so the suite can be stopped and started again and carries on where it left off. Load
-test runs and runs marked exclude in human.json don't count as done.
+A task and harness that already have --runs graded runs for the same target, model, task set, BENCH_VARIANT
+and BENCH_YOLO are skipped, so the suite can be stopped and started again and carries on where it left off.
+Load test runs and runs marked exclude in human.json don't count as done.
 
   --dry-run      list what would run and what is already done, run nothing
+  --runs N       graded runs wanted per task and harness (default 1). Breadth first: every task gets its
+                 first run before any gets its second, so a suite stopped early still covers all tasks
   --timeout-min  a run over this is stopped, graded as it stands and marked timed_out (default 45)
 
 Stop it after the current run with: touch ~/suite.stop (removed when the suite starts). Ctrl+C stops at once;
@@ -62,10 +64,11 @@ def same_target(a, b):
     return a == b or (a in LOCAL_NAMES and b in LOCAL_NAMES)
 
 
-def is_done(task, harness, target, model, ts_root):
-    """True when the task already has a graded, not excluded, non load test run of this configuration."""
+def done_runs(task, harness, target, model, ts_root):
+    """How many graded, not excluded, non load test runs of this configuration the task has."""
     variant = os.environ.get('BENCH_VARIANT', '')
     yolo = os.environ.get('BENCH_YOLO', '0') == '1'
+    count = 0
     for meta_path in glob.glob(os.path.join(RESULTS, task, '*', 'meta.txt')):
         run = os.path.dirname(meta_path)
         m = scorer.meta(run)
@@ -79,8 +82,8 @@ def is_done(task, harness, target, model, ts_root):
             continue
         human = scorer.load_human(run) or {}
         if not human.get('exclude'):
-            return True
-    return False
+            count += 1
+    return count
 
 
 def newest_run_dir(task, harness, target, model, since):
@@ -142,15 +145,12 @@ def run_one(task, harness, target, model, timeout_min, log):
     return proc.returncode
 
 
-def plan(tasks, harnesses, target, model, ts_root):
-    """The (task, harness) pairs still to run, in order, and how many are already done."""
-    todo, done = [], 0
-    for task in tasks:
-        for harness in harnesses:
-            if is_done(task, harness, target, model, ts_root):
-                done += 1
-            else:
-                todo.append((task, harness))
+def plan(tasks, harnesses, target, model, ts_root, runs):
+    """The (task, harness) runs still to do, breadth first (all first runs, then all second runs, ...), and
+    how many of the wanted runs are already done."""
+    have = {(t, h): done_runs(t, h, target, model, ts_root) for t in tasks for h in harnesses}
+    todo = [(t, h) for n in range(runs) for t in tasks for h in harnesses if have[(t, h)] <= n]
+    done = sum(min(n, runs) for n in have.values())
     return todo, done
 
 
@@ -160,6 +160,7 @@ def main(argv):
     p.add_argument('--harness', default='oc,cx')
     p.add_argument('--target', default='local', choices=['local', 'dryrun'])
     p.add_argument('--timeout-min', type=float, default=45)
+    p.add_argument('--runs', type=int, default=1)
     p.add_argument('--dry-run', action='store_true')
     a = p.parse_args(argv)
 
@@ -174,9 +175,9 @@ def main(argv):
     if not model:
         sys.exit(f'no model set for target {a.target} (LOCAL_MODEL/LOCAL_MODEL or DRYRUN_MODEL in .env)')
 
-    todo, done = plan(tasks, harnesses, a.target, model, ts_root)
+    todo, done = plan(tasks, harnesses, a.target, model, ts_root, a.runs)
     variant = os.environ.get('BENCH_VARIANT')
-    header = (f'{len(todo)} to run, {done} already done: {a.target} {model}{f" variant={variant}" if variant else ""},'
+    header = (f'{len(todo)} to run, {done} already done ({a.runs} per task and harness): {a.target} {model}{f" variant={variant}" if variant else ""},'
               f' task set {ts_root}')
     if a.dry_run:
         print(header)
