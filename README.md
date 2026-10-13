@@ -405,7 +405,7 @@ vllm serve /root/models/qwen3.8-flash-next-fp8 \
   --max-model-len 131072 \
   --max-num-seqs 256 \
   --gpu-memory-utilization 0.90 \
-  --kv-cache-dtype fp8 --attention-config.indexer_kv_dtype fp8 \
+  --attention-config.indexer_kv_dtype fp8 \
   --limit-mm-per-prompt '{"image":0,"video":0}' \
   --reasoning-parser qwen3 \
   --enable-auto-tool-choice --tool-call-parser qwen3_coder \
