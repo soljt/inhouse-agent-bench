@@ -13,5 +13,10 @@ def grade(g):
 
 # How the checks map to the rubric (defaults in bench/lib/rubric.py)
 
+AUTO_KEYS = {
+    'reuses_normalize_whitespace': (True, 'Added code in textstats/ calls normalize_whitespace; feeds Reuse'),
+}
+
+
 def reuse(a):
     return 3 if a.get('reuses_normalize_whitespace') is True else 1

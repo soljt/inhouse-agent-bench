@@ -35,11 +35,12 @@ python3 bench/grade.py e1-word-count /tmp/e1/grade      # writes /tmp/e1/grade/a
 taskset.toml        image, workspace, agent start folder, grader module
 make_workspace.py   builds the workspace repo and tags its starting point (example-base)
 container/          the image: FROM llm-bench-base, plus pytest
-lib/example.py      Grader subclass with a pytest check; the repository's RULE_BREAKS and BUILD_KEYS
+lib/example.py      Grader subclass with a pytest check; the repository's RULE_BREAKS, BUILD_KEYS and AUTO_KEYS
 tasks/<id>/
   prompt.md         what the agent is asked
   task.env          BASE_TAG=example-base
-  grade.py          grade(g) runs the checks; reuse(auto) maps one of them to the rubric
+  grade.py          grade(g) runs the checks; reuse(auto) maps one of them to the rubric; AUTO_KEYS says
+                    what its own keys mean on the review page (RUBRIC_NOTES: task notes for the rubric)
   hidden/           tests the agent never sees
   reference.patch   a good answer, for checking the grader
 ```

@@ -94,11 +94,11 @@ def heat_cell(c):
         if total == 0 and c['gates'] == 0:
             failed = ', '.join(c['failed']) or 'gate'
             return f'<td class="c fail" title="{esc(gates)}; failed: {esc(failed)}"><b>&#10007; 0</b><small>{esc(failed)}</small></td>'
-        step = min(len(RAMP) - 1, round(total / 18 * (len(RAMP) - 1)))
+        step = min(len(RAMP) - 1, round(total / 10 * (len(RAMP) - 1)))
         ink = '#ffffff' if step >= WHITE_TEXT_FROM else '#0b0b0b'
         spread = f' ({min(c["done"]):g}-{max(c["done"]):g})' if len(c['done']) > 1 else ''
         more = f', {c["pending"]} to grade' if c['pending'] else ''
-        return (f'<td class="c" style="background:{RAMP[step]};color:{ink}" title="mean {total:.1f}/18{spread}; '
+        return (f'<td class="c" style="background:{RAMP[step]};color:{ink}" title="mean {total:.1f}/10{spread}; '
                 f'{esc(gates)}{more}"><b>{total:.1f}</b><small>{c["gates"]}/{c["n"]}{" +" + str(c["pending"]) + "?" if c["pending"] else ""}</small></td>')
     return (f'<td class="c wait" title="{esc(gates)}; {c["pending"]} to grade"><b>?</b>'
             f'<small>{c["gates"]}/{c["n"]} &middot; grade</small></td>')
@@ -117,8 +117,8 @@ def totals_section(data):
                      f' {pending} runs still to grade">?</td>' if pending else f'<td>{num(mean(means))}</td>')
         rows.append(f'<tr><td>{esc(m)}</td>' + ''.join(heat_cell(cells.get((m, t))) for t in tasks) + mean_cell + '</tr>')
     ramp = ''.join(f'<span style="background:{c}"></span>' for c in RAMP)
-    out = [f'<h2>Totals per task</h2><p class="note">Mean total out of 18 over complete runs, darker is higher:'
-           f' 0<span class="ramp">{ramp}</span>18. Small print: runs passing the gates / runs, and how many still'
+    out = [f'<h2>Totals per task</h2><p class="note">Mean total out of 10 over complete runs, darker is higher:'
+           f' 0<span class="ramp">{ramp}</span>10. Small print: runs passing the gates / runs, and how many still'
            f' need a human score (+k?). &#10007; marks a failed gate, ? a run that passed the gates and waits for'
            f' grading. Hover a cell for details.</p>',
            f'<div class="card"><table class="heat"><tr><th>harness target model</th>{head}<th title="mean of tasks">mean</th></tr>'
@@ -167,7 +167,7 @@ def model_sections(data):
                      c['unbacked claims'], num(c['output k per passing run'])])
     tags = [[m, ', '.join(f'{k} {v}' for k, v in data['tags'][m].most_common()) or 'none'] for m in models]
     return '\n'.join([
-        '<h2>Dimensions</h2><p class="note">Mean score 0 to 3 over the runs that passed the gates (automatic and'
+        '<h2>Dimensions</h2><p class="note">Mean score 1 to 10 over the runs that passed the gates (automatic and'
         ' human values; a human score overrides the suggestion).</p>',
         simple_table(['model'] + list(next(iter(data['dims'].values()), {}).keys()) + ['gates'], dims),
         '<h2>Cost and behaviour</h2><p class="note">Means per run (min-max). Unbacked claims: the final message'
@@ -285,7 +285,7 @@ def load_section(loads):
         tables.append(f'<h3><i style="display:inline-block;width:12px;height:12px;border-radius:3px;'
                       f'background:var(--s{slot});margin-right:6px"></i>{esc(lg["group"])}: {esc(lg["label"])},'
                       f' {esc(lg["task"])}</h3>'
-                      + simple_table(['agents', 'gates', 'auto /12', 'wall min', 's per request', 'out tok/s per agent',
+                      + simple_table(['agents', 'gates', 'auto /10', 'wall min', 's per request', 'out tok/s per agent',
                                       'aggregate out tok/s', 'without timed out', 'unbacked claims', 'timed out'], rows))
     return ('<h2 id="load">Load tests</h2><p class="note">How the setup copes with several agents at once (the work is graded'
             ' automatically only). A run that timed out stretches its level\'s wall clock, so the aggregate chart'

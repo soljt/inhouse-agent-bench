@@ -217,23 +217,42 @@ tables with the model's server report in `results/`.
 ### Reviewing and reporting
 
 ```bash
-bench/review.py next            # review pending runs one by one in the browser, grade form at the bottom
-bench/review.py next --blind    # same, harness and model hidden, random order
-bench/review.py pending         # list them
-bench/review.py <run> --pager   # terminal and $EDITOR instead of the browser
+bench/review.py next --blind    # grade task by task in the browser: all runs of a task side by side, ranked
+bench/review.py next            # same, harness and model shown
+bench/review.py task e2-slugify   # one task (again), e.g. to change a grade or a rank
+bench/review.py pending         # list the runs that still need a score or a rank
+bench/review.py <run>           # one run on its own, no ranking
+bench/review.py <run> --pager   # terminal and $EDITOR instead of the browser (one run, no ranking)
 bench/report.py                 # bench/results/report.html (open in a browser), report.md and report.csv
 bench/regrade.py <run>...       # grade finished runs again with the current grader, from their saved diff
 ```
 
-The review page shows the prompt, the agent's final messages, the automatic checks, telemetry, the commands it
-ran, the diff side by side, the grader logs and any sections the task adds. The form writes
-`<run>/grade/human.json`. Load test runs need no human score and never show up as pending; `exclude` drops a
-run (aborted, broken) from review and the report.
+The review page is one page per task, with tabs:
 
-**Scoring.** Six dimensions, 0 to 3 each, total 18: correctness, procedure, reuse, scope (suggested
-automatically), verification and merge-worthiness (human only). A run that fails a gate (builds, behaviour =
-hidden test, no harm) scores 0. A human score always overrides the suggestion. Failure tags: bad tool call,
-loop, gave up, wrong fix, rule break, false claim.
+- **Task**: the prompt (and follow-up turns), the rubric (what each dimension asks, what each score band looks
+  like, the task's own notes) and the reference solution, folded away.
+- **Run A, B, ...**: one per run of the task, from every harness and model. The agent's final messages, gates
+  and suggested scores, the automatic checks (`auto.json`, with each key's good value and what it measures),
+  telemetry, the commands it ran, the diff side by side, the grader logs and any sections the task adds
+  (T12: its findings). Each tab ends with that run's grade form. Blind, the letters are shuffled and harness
+  and model hidden.
+- **Grade & rank**: every run's scores side by side (the same fields as the run tabs, kept in sync), the
+  running total, and the ranking: order the runs from best to worst (drag, the arrows, or "Order by total"
+  and then adjust). The page refuses to save until the runs are ranked.
+
+"Save and next task" writes each run's `<run>/grade/human.json` and moves on. A run is pending when a
+dimension has neither a human nor a suggested score, or when its task's runs were not all ranked together, so
+a new run (the next model's suite) puts its whole task back in the queue: you grade the new runs and rank them
+among the old ones, whose grades are filled in. Load test runs need no human score and never show up as
+pending; `exclude` drops a run (aborted, broken) from review, the ranking and the report.
+
+**Scoring.** Six dimensions, 1 to 10 each: correctness, procedure, reuse, scope (suggested automatically),
+verification and merge-worthiness (human only). The total is their mean; a run that fails a gate (builds,
+behaviour = hidden test, no harm) scores 0 and needs no scores, but is still ranked. A human score always
+overrides the suggestion. Failure tags: bad tool call, loop, gave up, wrong fix, rule break, false claim.
+The rank (`rank` of `rank_n` in `human.json`) is kept apart from the total: scores say how good a run is on
+its own, the rank says which of the runs on the same task you would rather have. A `human.json` from the old
+0 to 3 scale (without `"scale": 10`) is ignored, so its run is graded again.
 
 **The report** has one row per harness, target, model, and `BENCH_VARIANT`/`yolo` when set, with totals per
 task, mean scores per dimension, cost (wall time, tokens, requests) and failure tags, plus a section per load
@@ -260,10 +279,31 @@ test. `report.csv` has one row per run.
    (`bench/lib/rubric.py`): the behaviour gate is `hidden_test_ok`, the build gate is every build key present,
    correctness is 3 when the hidden test passes, procedure is 3 minus broken rules, scope comes from
    `out_of_scope_files`, and there is no reuse suggestion. Optional functions:
-   `behaviour(auto)`, `correctness(auto)`, `reuse(auto)`, `procedure(auto, score, broken)`; also
-   `review_sections()` for extra sections on the review page and `REGRADE_FROM_DIFF = False` when the
-   result is not in the workspace diff.
-6. Check the grader on the reference fix and on the base: `bench/reset.py <tag>`, apply the patch to the
+   `behaviour(auto)`, `correctness(auto)`, `reuse(auto)`, `procedure(auto, score, broken)`. These work on a
+   coarse 0 to 3 scale (`band` and `misses` help); the suggestion shown is mapped onto 1 to 10 (0, 1, 2, 3
+   become 1, 4, 7, 10). `REGRADE_FROM_DIFF = False` when the result is not in the workspace diff.
+6. Tell the reviewer what your checks mean, in the same `grade.py`. Without this the review page lists a key
+   with no explanation and no colour:
+   ```python
+   # key -> (good value, what it measures). Good: True or False, 0 (any count above is bad),
+   # 'high' or 'low' (more or less is better, no fixed line), or None (information only)
+   AUTO_KEYS = {
+       'new_regexes': (0, 'New re.sub/split/findall/compile calls in textstats/ (AGENTS.md: reuse text.py); feeds Reuse'),
+   }
+   # Task specific grading notes, shown under the dimension in the rubric
+   RUBRIC_NOTES = {
+       'reuse': 'str.split() or normalize_whitespace, not a new regex.',
+   }
+   ```
+   Keys every task of your task set shares (a build gate, a repository rule) go in an `AUTO_KEYS` dict in
+   the task set's module (`taskset.toml`: `module`) instead; the generic checks' keys are described in
+   `rubric.AUTO_KEYS`. A `<key>_summary` needs no entry. `review.py` reads all three, the task's last.
+7. Optionally add sections to the review page with `review_sections()`, a list of
+   `(title, kind, file in grade/[, options])`. Kinds: `md`, `text`, `findings` (one `path:line: text` finding
+   per line, shown as a numbered list with the location set apart), `tsv` (tab separated rows; options:
+   `columns` for the header, `finding_columns` for cells shown as findings, `ok` and `bad` for values to
+   colour green or red). T12 in the private task set uses all of these.
+8. Check the grader on the reference fix and on the base: `bench/reset.py <tag>`, apply the patch to the
    workspace, `bench/grade.py <id> /tmp/<id>/grade`.
 
 ### Security model

@@ -14,6 +14,13 @@ RULE_BREAKS = {
 # The build gate: the existing tests still pass
 BUILD_KEYS = ['tests_ok']
 
+# What this task set's checks put in auto.json, for the review page: key -> (good value, what it measures).
+# See AUTO_KEYS in bench/lib/rubric.py for the generic keys and the good values.
+AUTO_KEYS = {
+    'tests_ok': (True, "The package's tests, the agent's own included, pass: the build gate"),
+    'agent_wrote_tests': (True, 'The agent added or changed tests (AGENTS.md asks for a test with every change)'),
+}
+
 
 class Grader(BaseGrader):
     # Python comments, for count_added

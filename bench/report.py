@@ -9,7 +9,7 @@ concurrency level in "Load tests" (all groups, or only --load <group>).
 Rows are harness, target and model, plus the run's BENCH_VARIANT label and "yolo" (BENCH_YOLO=1) when set.
 Runs with "exclude": true in grade/human.json are left out entirely.
 
-A cell in the main table reads `mean (min-max) g/n`: mean total out of 18 over the complete runs, the
+A cell in the main table reads `mean (min-max) g/n`: mean total (1 to 10, 0 for a failed gate) over the complete runs, the
 spread, and how many of the n runs passed the gates. `+k?` means k more runs still need a human score.
 report.html shows the same in the browser: a colour scale per task, charts for the load tests.
 """
@@ -133,7 +133,7 @@ def load_groups(load_runs):
             tel = [r['telemetry'] for r in rs if r['telemetry']]
             finished = [r for r in rs if not r.get('timed_out')]
             rows.append({'agents': int(lvl), 'gates': sum(1 for r in rs if r['gate']['passed']), 'n': len(rs),
-                         'auto': [r['auto_subtotal'] for r in rs],
+                         'auto': [r['auto_mean'] for r in rs],
                          'wall': [r['wall_min'] for r in rs if r['wall_min'] is not None],
                          's_req': [x['request_s_mean'] for x in tel if x.get('request_s_mean') is not None],
                          'tps': [x['output_tps'] for x in tel if x.get('output_tps') is not None],
@@ -154,7 +154,7 @@ def markdown(scores, data, loads):
           f"{sum(1 for s in scores if not s['complete'])} still need a human score "
           f"(`bench/review.py next`).", '',
           '## Totals per task', '',
-          'Cell: mean total out of 18 over complete runs (min-max), then runs passing the gates / runs. '
+          'Cell: mean total out of 10 over complete runs (min-max), then runs passing the gates / runs. '
           '`+k?` = k runs not yet human graded.', '']
     rows = []
     for m in models:
@@ -177,7 +177,7 @@ def markdown(scores, data, loads):
         rows.append(row)
     md.append(table(['harness target model'] + [short[t] for t in tasks] + ['mean of tasks'], rows))
 
-    md += ['', '## Dimensions', '', 'Mean score 0 to 3 over runs that passed the gates (auto and human values).', '']
+    md += ['', '## Dimensions', '', 'Mean score 1 to 10 over runs that passed the gates (auto and human values).', '']
     rows = [[m] + [f'{statistics.mean(v):.2f}' if v else '' for v in data['dims'][m].values()]
             + [data['cost'][m]['gates']] for m in models]
     md.append(table(['model'] + DIMENSIONS + ['gates'], rows))
@@ -199,8 +199,8 @@ def markdown(scores, data, loads):
                                         for m in models]))
 
     if loads:
-        md += ['', '## Load tests', '', 'Per concurrency level: runs passing the gates, automatic subtotal (correctness, '
-               'procedure, reuse, scope; max 12, no human scores needed), wall time, time per model request and output '
+        md += ['', '## Load tests', '', 'Per concurrency level: runs passing the gates, automatic mean (correctness, '
+               'procedure, reuse, scope; out of 10, no human scores needed), wall time, time per model request and output '
                'tokens per second per agent (model time only, prefill included), and aggregate output tokens per '
                'second over the level\'s wall clock (all agents, tool time included). A timed-out run stretches that '
                'wall clock, so the next column repeats it without such runs.', '']
@@ -210,7 +210,7 @@ def markdown(scores, data, loads):
                      fmt(r['tps']), f"{r['agg']:.0f}" if r['agg'] is not None else '',
                      f"{r['agg_finished']:.0f}" if r['agg_finished'] is not None else '',
                      r['unbacked'], r['timed_out']] for r in lg['levels']]
-            md.append(table(['agents', 'gates', 'auto /12', 'wall min', 's per request', 'out tok/s per agent',
+            md.append(table(['agents', 'gates', 'auto /10', 'wall min', 's per request', 'out tok/s per agent',
                              'aggregate out tok/s', 'aggregate without timed out', 'unbacked claims', 'timed out'],
                             rows))
             md.append('')
@@ -227,9 +227,9 @@ def markdown(scores, data, loads):
 
 def write_csv(path, scores, load_runs):
     """One row per run."""
-    fields = ['run', 'task', 'harness', 'target', 'model', 'variant', 'yolo', 'start', 'end', 'wall_min', 'load_group', 'load_level', 'auto_subtotal', 'gate_passed', 'builds', 'behaviour',
+    fields = ['run', 'task', 'harness', 'target', 'model', 'variant', 'yolo', 'start', 'end', 'wall_min', 'load_group', 'load_level', 'auto_mean', 'gate_passed', 'builds', 'behaviour',
               'no_harm'] + DIMENSIONS + [d + '_source' for d in DIMENSIONS] + \
-             ['total', 'complete', 'rules_broken', 'failure_tag', 'failure_tag_suggested', 'model_requests',
+             ['total', 'rank', 'rank_n', 'complete', 'rules_broken', 'failure_tag', 'failure_tag_suggested', 'model_requests',
               'input_tokens', 'output_tokens', 'peak_context', 'tool_calls', 'tool_errors', 'nonzero_exits',
               'request_s_mean', 'output_tps', 'verify_commands', 'unbacked_claim', 'intervention', 'notes']
     with open(path, 'w', newline='') as f:

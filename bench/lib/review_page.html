@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Review page for one bench run. bench/review.py serves it with DATA filled in and saves the grade form. -->
+<!-- Review page for the runs of one task. bench/review.py serves it with DATA filled in and saves the grades. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -12,60 +12,117 @@
 <script src="https://cdn.jsdelivr.net/npm/diff2html@3/bundles/js/diff2html-ui.min.js"></script>
 <style>
   :root { --bg: #f6f7f9; --card: #fff; --fg: #1d2330; --muted: #5f6b7a; --line: #dde1e7;
-          --ok: #1a7f37; --bad: #cf222e; --code: #f0f2f5; --accent: #0969da; }
+          --ok: #1a7f37; --bad: #cf222e; --code: #f0f2f5; --accent: #0969da; --accent-bg: #ddeafc; --warn-bg: #fff4d6; }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #0f1218; --card: #171b23; --fg: #e3e7ee; --muted: #94a0b1; --line: #2a303b;
-            --ok: #3fb950; --bad: #f85149; --code: #1f2430; --accent: #58a6ff; }
+            --ok: #3fb950; --bad: #f85149; --code: #1f2430; --accent: #58a6ff; --accent-bg: #1b2a40; --warn-bg: #3a2f12; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
   header { position: sticky; top: 0; z-index: 10; background: var(--card); border-bottom: 1px solid var(--line);
-           padding: 10px 16px; }
-  header h1 { margin: 0 0 6px; font-size: 16px; }
-  nav { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
-  nav a { color: var(--accent); text-decoration: none; }
+           padding: 10px 16px 0; }
+  header h1 { margin: 0 0 8px; font-size: 16px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  header h1 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+  #unsaved { color: var(--bad); font-size: 13px; font-weight: 600; }
+  .tabs { display: flex; gap: 2px; flex-wrap: wrap; }
+  .tabs button { font: inherit; font-size: 14px; border: 1px solid var(--line); border-bottom: none; background: var(--bg);
+                 color: var(--fg); padding: 5px 14px; border-radius: 6px 6px 0 0; cursor: pointer; }
+  .tabs button.active { background: var(--accent-bg); border-color: var(--accent); font-weight: 600; }
+  .tabs button .mark { font-size: 12px; margin-left: 6px; color: var(--muted); }
+  .tabs button .mark.bad { color: var(--bad); }
+  .tabs button .mark.ok { color: var(--ok); }
+  nav.sections { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; padding: 6px 0; border-top: 1px solid var(--line); }
+  nav.sections:empty { display: none; }
+  nav.sections a { color: var(--accent); text-decoration: none; }
   main { max-width: 1600px; margin: 0 auto; padding: 16px; }
-  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; scroll-margin-top: 90px;
+  .panel[hidden] { display: none; }
+  .runhead { margin: 0 0 12px; font-size: 14px; color: var(--muted); }
+  .runhead b { color: var(--fg); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; scroll-margin-top: 130px;
             padding: 12px 16px; }
   section h2 { margin: 0 0 8px; font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  section h3 { margin: 16px 0 4px; font-size: 15px; }
   .md { max-width: 900px; }
   .md pre, pre.text { background: var(--code); padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
-  .md code { background: var(--code); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
+  .md code, .loc, td code { background: var(--code); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
   .md pre code { padding: 0; background: none; }
   pre.text { white-space: pre-wrap; word-break: break-word; margin: 0; }
   table.kv { border-collapse: collapse; font-size: 14px; }
-  table.kv td { border-top: 1px solid var(--line); padding: 3px 16px 3px 0; vertical-align: top; }
+  table.kv td, table.kv th { border-top: 1px solid var(--line); padding: 4px 16px 4px 0; vertical-align: top; text-align: left; }
+  table.kv th { color: var(--muted); font-weight: 600; font-size: 13px; }
   table.kv td:first-child { color: var(--muted); white-space: nowrap; }
+  table.kv td.meaning { color: var(--muted); font-size: 13px; max-width: 70ch; }
+  table.kv td.value { font-family: ui-monospace, monospace; font-size: 13px; max-width: 60ch; word-break: break-word; }
   .ok { color: var(--ok); font-weight: 600; }
   .bad { color: var(--bad); font-weight: 600; }
+  .muted { color: var(--muted); }
   details { border-top: 1px solid var(--line); padding: 4px 0; }
-  summary { cursor: pointer; font-family: ui-monospace, monospace; font-size: 13px; }
-  .toggle { float: right; font-size: 13px; }
+  summary { cursor: pointer; font-size: 14px; }
+  details.log summary { font-family: ui-monospace, monospace; font-size: 13px; }
+  .toggle { float: right; font-size: 13px; text-transform: none; letter-spacing: 0; }
   .d2h-wrapper { font-size: 13px; }
+  /* Review findings: one card per path:line: finding */
+  ol.findings { margin: 0; padding-left: 28px; max-width: 1000px; }
+  ol.findings li { padding: 8px 0; border-top: 1px solid var(--line); }
+  ol.findings li:first-child { border-top: none; }
+  .loc { display: inline-block; margin-bottom: 4px; font-family: ui-monospace, monospace; word-break: break-all; }
+  .loc .dir { color: var(--muted); }
+  .finding-text { max-width: 90ch; }
+  table.tsv { border-collapse: collapse; font-size: 14px; width: 100%; }
+  table.tsv th, table.tsv td { border-top: 1px solid var(--line); padding: 6px 12px 6px 0; vertical-align: top; text-align: left; }
+  table.tsv th { color: var(--muted); font-size: 13px; }
+  /* Rubric */
+  table.rubric { border-collapse: collapse; font-size: 14px; width: 100%; }
+  table.rubric th, table.rubric td { border: 1px solid var(--line); padding: 6px 10px; vertical-align: top; text-align: left; }
+  table.rubric th { background: var(--bg); font-size: 13px; }
+  table.rubric td.dim { width: 26%; }
+  table.rubric td.dim b { display: block; text-transform: capitalize; }
+  .note { background: var(--warn-bg); border-radius: 4px; padding: 2px 6px; margin-top: 6px; display: block; font-size: 13px; }
+  /* Grade grid */
+  .gridwrap { overflow-x: auto; }
+  table.grid { border-collapse: collapse; font-size: 14px; }
+  table.grid th, table.grid td { border-top: 1px solid var(--line); padding: 5px 10px; text-align: left; vertical-align: middle; }
+  table.grid thead th { position: sticky; top: 0; background: var(--card); }
+  table.grid th.row { color: var(--muted); font-weight: 400; white-space: nowrap; text-transform: capitalize; }
+  table.grid th.row small { display: block; text-transform: none; font-size: 12px; max-width: 34ch; white-space: normal; }
+  table.grid thead button { font: inherit; font-weight: 600; background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; }
+  table.grid td.excluded { opacity: .45; }
+  select, input[type=text], textarea {
+    font: inherit; font-size: 14px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  select.human { border-color: var(--accent); background: var(--accent-bg); }
+  textarea { width: 100%; min-width: 16ch; min-height: 60px; }
+  input[type=text] { width: 100%; min-width: 16ch; }
   form.grade { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; align-items: center; max-width: 900px; }
-  form.grade label { color: var(--muted); font-size: 14px; }
-  form.grade .hint { color: var(--muted); font-size: 13px; margin-left: 8px; }
-  form.grade select, form.grade input[type=text], form.grade textarea {
-    font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
-  form.grade input[type=text], form.grade textarea { width: 100%; }
-  form.grade textarea { min-height: 90px; }
-  .buttons { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; margin-top: 8px; }
-  .buttons button { font: inherit; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer;
-                    background: var(--card); color: var(--fg); }
+  form.grade label { color: var(--muted); font-size: 14px; text-transform: capitalize; }
+  .hint { color: var(--muted); font-size: 13px; margin-left: 8px; }
+  ol.ranking { padding-left: 28px; max-width: 720px; }
+  ol.ranking li { display: flex; gap: 10px; align-items: center; padding: 6px 8px; margin: 4px 0; border: 1px solid var(--line);
+                  border-radius: 6px; background: var(--bg); cursor: grab; }
+  ol.ranking li.dragging { opacity: .5; }
+  ol.ranking li .name { font-weight: 600; min-width: 2em; }
+  ol.ranking li .info { color: var(--muted); font-size: 13px; flex: 1; }
+  ol.ranking button, .buttons button { font: inherit; font-size: 14px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line);
+                                       cursor: pointer; background: var(--card); color: var(--fg); }
+  .buttons { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .buttons button { padding: 6px 16px; }
   .buttons button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   #status { font-size: 14px; }
 </style>
 </head>
 <body>
-<header><h1 id="title"></h1><nav id="nav"></nav></header>
+<header>
+  <h1><span id="title"></span><small id="subtitle"></small><span id="unsaved"></span></h1>
+  <div class="tabs" id="tabs" role="tablist"></div>
+  <nav class="sections" id="nav"></nav>
+</header>
 <main id="main"></main>
 <script type="application/json" id="data">/*DATA*/null</script>
 <script>
 const data = JSON.parse(document.getElementById('data').textContent);
+const info = data.info;
 const main = document.getElementById('main');
-document.getElementById('title').textContent = data.header;
-document.title = data.header;
+const DIMS = info.dims.map(d => d.name);
 
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -75,30 +132,89 @@ const el = (tag, cls, text) => {
 };
 // Agent output is untrusted, so rendered markdown goes through DOMPurify
 const markdown = src => DOMPurify.sanitize(marked.parse(src || ''));
-// Only gate results and warnings are coloured. A plain true or false in auto.json can be good or bad.
+const inlineMarkdown = src => DOMPurify.sanitize(marked.parseInline(src || ''));
+// Only gate results and warnings are coloured here; auto.json rows carry their own verdict
 const verdict = v => {
   const s = String(v);
   if (s === 'ok') return 'ok';
   if (s === 'FAIL' || s.startsWith('WARNING')) return 'bad';
   return '';
 };
+const show = v => v === null || v === undefined ? '-' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+
+// A review finding "path:line: text": the location set apart from the text
+const FINDING = /^(\S+?):(\d+):\s*(.*)$/;
+function finding(line, box) {
+  const m = line.match(FINDING);
+  if (!m) { const d = el('div', 'finding-text'); d.innerHTML = inlineMarkdown(line); box.append(d); return; }
+  const slash = m[1].lastIndexOf('/');
+  const loc = el('span', 'loc');
+  loc.append(el('span', 'dir', m[1].slice(0, slash + 1)), el('b', '', m[1].slice(slash + 1)), el('span', '', ':' + m[2]));
+  const text = el('div', 'finding-text');
+  text.innerHTML = inlineMarkdown(m[3]);
+  box.append(loc, text);
+}
 
 const render = {
   md(body, box) { const d = el('div', 'md'); d.innerHTML = markdown(body); box.append(d); },
   text(body, box) { box.append(el('pre', 'text', body || '(none)')); },
+  // One finding per line, as the review tasks ask for; other lines show as markdown
+  findings(body, box) {
+    const lines = (body || '').split('\n').filter(l => l.trim());
+    if (!lines.length) { box.append(el('p', 'muted', '(none)')); return; }
+    const ol = el('ol', 'findings');
+    for (const line of lines) { const li = el('li'); finding(line, li); ol.append(li); }
+    box.append(ol);
+  },
+  // Tab separated rows. options: columns (header), finding_columns (cells shown as findings), ok/bad (values to colour)
+  tsv(body, box, h2, o) {
+    const rows = (body || '').split('\n').filter(l => l.trim()).map(l => l.split('\t'));
+    if (!rows.length) { box.append(el('p', 'muted', '(none)')); return; }
+    const t = el('table', 'tsv');
+    if (o.columns) { const tr = el('tr'); o.columns.forEach(c => tr.append(el('th', '', c))); t.append(tr); }
+    for (const row of rows) {
+      const tr = el('tr');
+      row.forEach((cell, i) => {
+        const td = el('td');
+        if ((o.finding_columns || []).includes(i)) finding(cell, td);
+        else td.textContent = cell;
+        if ((o.ok || []).includes(cell)) td.className = 'ok';
+        if ((o.bad || []).includes(cell)) td.className = 'bad';
+        tr.append(td);
+      });
+      t.append(tr);
+    }
+    box.append(t);
+  },
   table(rows, box) {
     const t = el('table', 'kv');
     for (const [k, v] of rows) {
       const tr = el('tr');
-      const val = v === null ? '-' : typeof v === 'object' ? JSON.stringify(v) : String(v);
-      tr.append(el('td', verdict(k), k), el('td', verdict(val), val));
+      tr.append(el('td', verdict(k), k), el('td', verdict(show(v)), show(v)));
+      t.append(tr);
+    }
+    box.append(t);
+  },
+  // auto.json: value coloured against the good value, with what the key measures
+  checks(rows, box) {
+    box.append(el('p', 'hint', 'Green or red where a key has a fixed good value; "higher" or "lower" means more or '
+      + 'less is better without a fixed line; no good value means information only. These feed the suggested '
+      + 'scores, but they are counted from the diff: read the diff before trusting them.'));
+    const t = el('table', 'kv');
+    const head = el('tr');
+    ['key', 'value', 'good', 'what it measures'].forEach(h => head.append(el('th', '', h)));
+    t.append(head);
+    for (const r of rows) {
+      const tr = el('tr');
+      tr.append(el('td', '', r.key), el('td', 'value ' + (r.verdict || ''), show(r.value)), el('td', 'muted', r.good),
+                el('td', 'meaning', r.meaning));
       t.append(tr);
     }
     box.append(t);
   },
   logs(files, box) {
     for (const [name, text] of files) {
-      const d = el('details');
+      const d = el('details', 'log');
       d.append(el('summary', '', name), el('pre', 'text', text || '(empty)'));
       box.append(d);
     }
@@ -125,94 +241,356 @@ const render = {
   },
 };
 
-// Grade form: posts to the review server, which writes grade/human.json
-function gradeForm(f) {
-  const box = el('section');
-  box.id = 'grade';
-  box.append(el('h2', '', 'Grade'));
-  const form = el('form', 'grade');
-  const row = (label, input, hint) => {
-    const l = el('label', '', label);
-    const cell = el('div');
-    cell.append(input);
-    if (hint) cell.append(el('span', 'hint', hint));
-    form.append(l, cell);
-  };
-  const select = (options, value) => {
-    const s = el('select');
-    for (const [v, text] of options) {
-      const o = el('option', '', text);
-      o.value = v;
-      o.selected = v === (value === null || value === undefined ? '' : String(value));
-      s.append(o);
-    }
-    return s;
-  };
-  const scores = {};
-  for (const d of f.dims) {
-    const keep = d.auto === null ? 'not scored' : `keep auto (${d.auto})`;
-    scores[d.name] = select([['', keep], ['0', '0'], ['1', '1'], ['2', '2'], ['3', '3']], d.value);
-    row(d.name, scores[d.name], d.auto === null ? 'needs you' : '');
-  }
-  const tag = select([['', 'none']].concat(f.failure_tags.map(t => [t, t])), f.failure_tag);
-  row('failure tag', tag, f.failure_tag_suggested ? `suggested: ${f.failure_tag_suggested}` : '');
-  const check = value => { const c = el('input'); c.type = 'checkbox'; c.checked = value; return c; };
-  const noHarm = check(f.no_harm);
-  row('no harm', noHarm, 'untick if the run did damage (a gate)');
-  const exclude = check(f.exclude);
-  row('exclude', exclude, 'drop this run from review and the report');
-  const intervention = el('input'); intervention.type = 'text'; intervention.value = f.intervention;
-  row('intervention', intervention);
-  const notes = el('textarea'); notes.value = f.notes;
-  row('notes', notes);
+// ---- Grade state, shared by the per-run cards and the Grade tab ----
+const state = {};
+const inputs = {};  // run id -> field -> [elements], kept in sync
+for (const r of data.runs) {
+  const f = r.form;
+  state[r.id] = { scores: Object.fromEntries(DIMS.map(d => [d, f.dims[d].value])), failure_tag: f.failure_tag,
+                  no_harm: f.no_harm, exclude: f.exclude, intervention: f.intervention, notes: f.notes };
+  inputs[r.id] = {};
+}
+const runById = Object.fromEntries(data.runs.map(r => [r.id, r]));
+const ranked = data.runs.every(r => r.form.rank) || !data.rank;
+let ranking = data.runs.map(r => r.id).sort((a, b) => (runById[a].form.rank || 99) - (runById[b].form.rank || 99));
+let rankingTouched = ranked;
+let dirty = false;
 
-  const status = el('span'); status.id = 'status';
-  const save = async goNext => {
-    const body = {
-      scores: Object.fromEntries(Object.entries(scores).map(([k, s]) => [k, s.value === '' ? null : Number(s.value)])),
-      failure_tag: tag.value || null, no_harm: noHarm.checked, exclude: exclude.checked,
-      intervention: intervention.value, notes: notes.value,
-    };
-    status.className = ''; status.textContent = 'saving...';
-    try {
-      const r = await fetch(f.save_url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                          body: JSON.stringify(body) });
-      const res = await r.json();
-      if (!r.ok) throw new Error(res.error || r.status);
-      status.className = 'ok'; status.textContent = 'saved: ' + res.summary;
-      if (goNext) location.href = res.next;
-    } catch (e) {
-      status.className = 'bad'; status.textContent = 'not saved: ' + e.message;
-    }
+function markDirty() {
+  dirty = true;
+  document.getElementById('unsaved').textContent = 'unsaved changes';
+}
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// The value a dimension counts with: the human score, else the suggestion
+const valueOf = (r, d) => state[r.id].scores[d] ?? r.form.dims[d].auto;
+function meanOf(r) {
+  if (r.gate_failed.length) return 0;
+  const vs = DIMS.map(d => valueOf(r, d));
+  if (vs.some(v => v === null || v === undefined)) return null;
+  return vs.reduce((a, b) => a + b, 0) / vs.length;
+}
+
+function bind(rid, field, elm) {
+  (inputs[rid][field] ||= []).push(elm);
+}
+function sync(rid, field, value, source) {
+  for (const e of inputs[rid][field] || []) {
+    if (e === source) continue;
+    if (e.type === 'checkbox') e.checked = value; else e.value = value ?? '';
+    if (e.tagName === 'SELECT') e.classList.toggle('human', e.value !== '' && field.startsWith('score:'));
+  }
+  refreshSummary();
+}
+
+function scoreSelect(r, d) {
+  const auto = r.form.dims[d].auto;
+  const s = el('select');
+  const keep = auto === null ? 'needs you' : `auto (${auto})`;
+  s.append(new Option(keep, ''));
+  for (let i = info.scale; i >= 1; i--) s.append(new Option(String(i), String(i)));
+  s.value = state[r.id].scores[d] ?? '';
+  s.classList.toggle('human', s.value !== '');
+  s.title = info.dims.find(x => x.name === d).question;
+  if (r.gate_failed.length) { s.disabled = true; s.title = 'gate failed: no scores needed'; }
+  s.onchange = () => {
+    state[r.id].scores[d] = s.value === '' ? null : Number(s.value);
+    s.classList.toggle('human', s.value !== '');
+    markDirty(); sync(r.id, 'score:' + d, s.value, s);
   };
-  const btnNext = el('button', 'primary', 'Save and next'); btnNext.type = 'button'; btnNext.onclick = () => save(true);
-  const btnSave = el('button', '', 'Save'); btnSave.type = 'button'; btnSave.onclick = () => save(false);
-  const buttons = el('div', 'buttons');
-  buttons.append(btnNext, btnSave, el('span', 'hint', 'Ctrl+Enter saves and moves on'), status);
-  form.append(buttons);
-  form.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(true); } };
-  box.append(form);
+  bind(r.id, 'score:' + d, s);
+  return s;
+}
+function tagSelect(r) {
+  const s = el('select');
+  s.append(new Option(r.form.failure_tag_suggested ? `none (suggested: ${r.form.failure_tag_suggested})` : 'none', ''));
+  info.failure_tags.forEach(t => s.append(new Option(t, t)));
+  s.value = state[r.id].failure_tag || '';
+  s.onchange = () => { state[r.id].failure_tag = s.value || null; markDirty(); sync(r.id, 'failure_tag', s.value, s); };
+  bind(r.id, 'failure_tag', s);
+  return s;
+}
+function checkbox(r, field) {
+  const c = el('input'); c.type = 'checkbox'; c.checked = state[r.id][field];
+  c.onchange = () => { state[r.id][field] = c.checked; markDirty(); sync(r.id, field, c.checked, c); if (field === 'exclude') drawRanking(); };
+  bind(r.id, field, c);
+  return c;
+}
+function textInput(r, field, multiline) {
+  const t = multiline ? el('textarea') : el('input');
+  if (!multiline) t.type = 'text';
+  t.value = state[r.id][field];
+  t.oninput = () => { state[r.id][field] = t.value; markDirty(); sync(r.id, field, t.value, t); };
+  bind(r.id, field, t);
+  return t;
+}
+
+// ---- Saving ----
+const status = [];
+function setStatus(cls, text) { for (const s of status) { s.className = cls; s.textContent = text; } }
+async function save(goNext) {
+  const kept = ranking.filter(id => !state[id].exclude);
+  if (data.rank && kept.length > 1 && !rankingTouched) {
+    switchTab('grade');
+    setStatus('bad', 'not saved: rank the runs first (drag them, or press "This order is right")');
+    return;
+  }
+  const body = { runs: state, ranking: kept };
+  setStatus('', 'saving...');
+  try {
+    const r = await fetch(data.save_url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                           body: JSON.stringify(body) });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || r.status);
+    dirty = false;
+    document.getElementById('unsaved').textContent = '';
+    setStatus('ok', 'saved: ' + res.summary);
+    if (goNext) location.href = res.next;
+  } catch (e) {
+    setStatus('bad', 'not saved: ' + e.message);
+  }
+}
+function saveButtons() {
+  const box = el('div', 'buttons');
+  const next = el('button', 'primary', 'Save and next task'); next.type = 'button'; next.onclick = () => save(true);
+  const only = el('button', '', 'Save'); only.type = 'button'; only.onclick = () => save(false);
+  const st = el('span'); st.id = 'status'; status.push(st);
+  box.append(next, only, el('span', 'hint', 'Ctrl+Enter saves and moves on'), st);
   return box;
 }
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(true); } });
 
-data.sections.forEach((s, i) => {
-  const box = el('section');
-  box.id = 's' + i;
-  const h2 = el('h2', '', s.title);
-  box.append(h2);
-  render[s.kind](s.body, box, h2);
-  main.append(box);
-  const a = el('a', '', s.title.replace(/ \(.*/, ''));
-  a.href = '#s' + i;
-  document.getElementById('nav').append(a);
-});
-if (data.form) {
-  main.append(gradeForm(data.form));
-  const a = el('a', '', 'Grade');
-  a.href = '#grade';
-  a.style.fontWeight = '600';
-  document.getElementById('nav').append(a);
+// ---- Tabs ----
+const tabs = document.getElementById('tabs');
+const nav = document.getElementById('nav');
+const panels = {};
+const built = {};
+const builders = {};
+let current = null;
+const scroll = {};
+
+function addTab(key, label, title, builder) {
+  const b = el('button', '', label);
+  b.type = 'button'; b.title = title || ''; b.dataset.key = key;
+  b.onclick = () => switchTab(key);
+  tabs.append(b);
+  const p = el('div', 'panel'); p.hidden = true;
+  main.append(p);
+  panels[key] = p; builders[key] = builder;
+  return b;
 }
+function switchTab(key) {
+  if (current) scroll[current] = window.scrollY;
+  for (const b of tabs.children) b.classList.toggle('active', b.dataset.key === key);
+  for (const [k, p] of Object.entries(panels)) p.hidden = k !== key;
+  if (!built[key]) { builders[key](panels[key]); built[key] = true; }
+  current = key;
+  nav.replaceChildren();
+  panels[key].querySelectorAll(':scope > section[id]').forEach(s => {
+    const a = el('a', '', s.dataset.short || s.querySelector('h2').firstChild.textContent);
+    a.href = '#' + s.id;
+    nav.append(a);
+  });
+  window.scrollTo(0, scroll[key] || 0);
+  history.replaceState(null, '', '#' + key);
+}
+function section(panel, id, title, short) {
+  const box = el('section'); box.id = id;
+  if (short) box.dataset.short = short;
+  const h2 = el('h2', '', title);
+  box.append(h2);
+  panel.append(box);
+  return [box, h2];
+}
+
+// Task tab: what the runs were asked, how to grade them, and the reference solution
+function buildTask(p) {
+  let [box] = section(p, 'task-prompt', 'Prompt');
+  render.md(info.prompt, box);
+  for (const t of info.turns) { box.append(el('h3', '', 'Follow-up turn ' + t.name.replace(/\.md$/, ''))); render.md(t.text, box); }
+  [box] = section(p, 'task-rubric', `Rubric: six scores, 1 to ${info.scale}`, 'Rubric');
+  box.append(el('p', 'hint', 'A run that fails a gate (it does not build, the hidden tests fail, or it did harm) scores 0 '
+    + 'and needs no scores; rank it with the others anyway. Otherwise the total is the mean of the six scores. '
+    + '"auto (n)" keeps the suggestion computed from the checks; pick a number to override it.'));
+  const t = el('table', 'rubric');
+  const head = el('tr');
+  head.append(el('th', '', 'Dimension'));
+  info.bands.forEach(b => head.append(el('th', '', b)));
+  t.append(head);
+  for (const d of info.dims) {
+    const tr = el('tr');
+    const td = el('td', 'dim');
+    td.append(el('b', '', d.name), el('span', '', d.question));
+    if (d.note) td.append(el('span', 'note', 'This task: ' + d.note));
+    tr.append(td);
+    d.bands.forEach(b => tr.append(el('td', '', b)));
+    t.append(tr);
+  }
+  box.append(t);
+  box.append(el('h3', '', 'Failure tags'));
+  box.append(el('p', 'hint', 'The main way a run went wrong, if it did: bad tool call (malformed calls the harness rejects), '
+    + 'loop (repeats an action without progress), gave up (stops early, or asks what the workspace answers), wrong fix '
+    + '(finishes confidently with an incorrect change), rule break (works but breaks AGENTS.md or a skill), false claim '
+    + '(reports verification it did not do).'));
+  if (info.reference) {
+    [box] = section(p, 'task-reference', 'Reference solution', 'Reference');
+    const d = el('details');
+    d.append(el('summary', '', 'Show the reference (graders only)'));
+    const inner = el('div'); render.md(info.reference, inner); d.append(inner);
+    box.append(d);
+  }
+}
+
+// A run's tab: its sections, then its own grade card
+function buildRun(r, p) {
+  const head = el('p', 'runhead');
+  head.append(el('b', '', 'Run ' + r.label), document.createTextNode('  ' + r.header));
+  if (r.gate_failed.length) head.append(el('span', 'bad', '  gate failed: ' + r.gate_failed.join(', ')));
+  p.append(head);
+  r.sections.forEach((s, i) => {
+    const [box, h2] = section(p, `${r.id}-s${i}`, s.title, s.title.replace(/ \(.*/, ''));
+    render[s.kind](s.body, box, h2, s.options || {});
+  });
+  const [box] = section(p, `${r.id}-grade`, 'Grade run ' + r.label, 'Grade');
+  const form = el('form', 'grade');
+  const row = (label, input, hint) => {
+    const cell = el('div'); cell.append(input);
+    if (hint) cell.append(el('span', 'hint', hint));
+    form.append(el('label', '', label), cell);
+  };
+  for (const d of info.dims) row(d.name, scoreSelect(r, d.name), d.question);
+  row('failure tag', tagSelect(r));
+  row('no harm', checkbox(r, 'no_harm'), 'untick if the run did damage (a gate)');
+  row('exclude', checkbox(r, 'exclude'), 'drop this run from review and the report');
+  row('intervention', textInput(r, 'intervention'));
+  row('notes', textInput(r, 'notes', true));
+  box.append(form);
+  if (data.rank) box.append(el('p', 'hint', 'Rank it against the other runs in the Grade tab.'));
+  box.append(saveButtons());
+}
+
+// Grade tab: every run side by side, then the ranking
+const summaryCells = {};
+function buildGrade(p) {
+  let [box] = section(p, 'grade-grid', 'Scores side by side', 'Scores');
+  const wrap = el('div', 'gridwrap');
+  const t = el('table', 'grid');
+  const thead = el('thead'); const hr = el('tr'); hr.append(el('th'));
+  for (const r of data.runs) {
+    const th = el('th'); const b = el('button', '', 'Run ' + r.label);
+    b.type = 'button'; b.title = 'open this run'; b.onclick = () => switchTab(r.id);
+    th.append(b);
+    if (r.who) th.append(el('div', 'hint', r.who));
+    hr.append(th);
+  }
+  thead.append(hr); t.append(thead);
+  const tbody = el('tbody');
+  const addRow = (label, hint, cell) => {
+    const tr = el('tr'); const th = el('th', 'row', label);
+    if (hint) th.append(el('small', '', hint));
+    tr.append(th);
+    for (const r of data.runs) { const td = el('td'); td.append(cell(r)); tr.append(td); }
+    tbody.append(tr);
+  };
+  addRow('gates', '', r => r.gate_failed.length ? el('span', 'bad', 'failed: ' + r.gate_failed.join(', ')) : el('span', 'ok', 'passed'));
+  for (const d of info.dims) addRow(d.name, d.question, r => scoreSelect(r, d.name));
+  addRow('total', 'mean of the six (0 if a gate failed)', r => { const s = el('b'); summaryCells[r.id] = s; return s; });
+  addRow('failure tag', '', r => tagSelect(r));
+  addRow('no harm', '', r => checkbox(r, 'no_harm'));
+  addRow('exclude', '', r => checkbox(r, 'exclude'));
+  addRow('intervention', '', r => textInput(r, 'intervention'));
+  addRow('notes', '', r => textInput(r, 'notes', true));
+  t.append(tbody); wrap.append(t); box.append(wrap);
+
+  if (data.rank) {
+    [box] = section(p, 'grade-rank', 'Ranking', 'Ranking');
+    box.append(el('p', 'hint', 'Order the runs from best (1) to worst, all things considered: would you rather merge, '
+      + 'or work with, the one above? Drag them, or use the arrows. Excluded runs are left out.'));
+    const ol = el('ol', 'ranking'); ol.id = 'ranking';
+    box.append(ol);
+    const tools = el('div', 'buttons');
+    const bySum = el('button', '', 'Order by total'); bySum.type = 'button';
+    bySum.onclick = () => {
+      ranking.sort((a, b) => (meanOf(runById[b]) ?? -1) - (meanOf(runById[a]) ?? -1));
+      rankingTouched = true; markDirty(); drawRanking();
+    };
+    const ok = el('button', '', 'This order is right'); ok.type = 'button';
+    ok.onclick = () => { rankingTouched = true; markDirty(); drawRanking(); };
+    tools.append(bySum, ok);
+    box.append(tools);
+    drawRanking();
+  }
+  [box] = section(p, 'grade-save', 'Save', 'Save');
+  box.append(saveButtons());
+  refreshSummary();
+}
+
+function drawRanking() {
+  const ol = document.getElementById('ranking');
+  if (!ol) return;
+  ol.replaceChildren();
+  const kept = ranking.filter(id => !state[id].exclude);
+  kept.forEach((id, i) => {
+    const r = runById[id];
+    const li = el('li'); li.draggable = true; li.dataset.id = id;
+    const m = meanOf(r);
+    li.append(el('span', 'name', r.label),
+              el('span', 'info', [r.who, r.gate_failed.length ? 'gate failed' : '', m === null ? 'total ?' : `total ${m.toFixed(1)}`]
+                 .filter(Boolean).join(' · ')));
+    const up = el('button', '', '▲'); up.type = 'button'; up.disabled = i === 0; up.title = 'move up';
+    const down = el('button', '', '▼'); down.type = 'button'; down.disabled = i === kept.length - 1; down.title = 'move down';
+    up.onclick = () => move(id, -1); down.onclick = () => move(id, 1);
+    li.append(up, down);
+    li.ondragstart = e => { li.classList.add('dragging'); e.dataTransfer.setData('text/plain', id); };
+    li.ondragend = () => li.classList.remove('dragging');
+    li.ondragover = e => e.preventDefault();
+    li.ondrop = e => {
+      e.preventDefault();
+      const from = e.dataTransfer.getData('text/plain');
+      if (from === id) return;
+      ranking.splice(ranking.indexOf(from), 1);
+      ranking.splice(ranking.indexOf(id), 0, from);
+      rankingTouched = true; markDirty(); drawRanking();
+    };
+    ol.append(li);
+  });
+  if (!rankingTouched) ol.append(el('p', 'bad', 'Not ranked yet.'));
+}
+function move(id, step) {
+  const kept = ranking.filter(x => !state[x].exclude);
+  const i = kept.indexOf(id), j = i + step;
+  if (j < 0 || j >= kept.length) return;
+  [kept[i], kept[j]] = [kept[j], kept[i]];
+  ranking = kept.concat(ranking.filter(x => state[x].exclude));
+  rankingTouched = true; markDirty(); drawRanking();
+}
+function refreshSummary() {
+  for (const r of data.runs) {
+    const c = summaryCells[r.id];
+    if (!c) continue;
+    const m = meanOf(r);
+    c.textContent = m === null ? '? (needs you)' : m.toFixed(1);
+    c.className = m === null ? 'bad' : '';
+  }
+  drawRanking();
+}
+
+// ---- Page ----
+document.getElementById('title').textContent = info.task;
+document.getElementById('subtitle').textContent =
+  `${data.runs.length} run${data.runs.length === 1 ? '' : 's'}${data.blind ? ', blind' : ''}`;
+document.title = 'Review ' + info.task;
+addTab('task', 'Task', 'prompt, rubric, reference', buildTask);
+for (const r of data.runs) {
+  const b = addTab(r.id, 'Run ' + r.label, r.who || r.header, p => buildRun(r, p));
+  if (r.gate_failed.length) b.append(el('span', 'mark bad', '✗ gate'));
+}
+addTab('grade', data.rank ? 'Grade & rank' : 'Grade', 'all scores side by side', buildGrade);
+built.grade = false;
+// The Grade tab holds the totals and the ranking; build it up front so its state exists
+buildGrade(panels.grade); built.grade = true;
+const start = location.hash.slice(1);
+switchTab(panels[start] ? start : 'task');
 </script>
 </body>
 </html>

@@ -18,7 +18,8 @@ BENCH_WORKSPACE and BENCH_DEPS override workspace and deps.
 
 A task's grade.py has grade(g) for the checks. It may also define how its checks map to the rubric
 (see rubric.py): behaviour(auto), correctness(auto), reuse(auto), procedure(auto, score, broken), plus
-review_sections() and REGRADE_FROM_DIFF.
+review_sections(), REGRADE_FROM_DIFF, AUTO_KEYS (what its auto.json keys mean) and RUBRIC_NOTES
+(task specific grading notes per dimension).
 
 Usage: python3 bench/lib/taskset.py env    shell assignments for run.sh and load.sh
 """
@@ -126,6 +127,20 @@ def rule_breaks(path=None):
 
 def build_keys(path=None):
     return getattr(module(path), 'BUILD_KEYS', None)
+
+
+def auto_keys(task, path=None):
+    """What the task's auto.json keys mean: rubric.AUTO_KEYS, then the task set module's AUTO_KEYS, then the
+    task's (later ones win). key -> (good value, description)."""
+    import rubric
+    return {**rubric.AUTO_KEYS, **getattr(module(path), 'AUTO_KEYS', {}),
+            **getattr(task_module(task, path), 'AUTO_KEYS', {})}
+
+
+def rubric_notes(task, path=None):
+    """Task specific grading notes per dimension from the task's RUBRIC_NOTES (dimension -> text), shown with
+    the rubric on the review page."""
+    return getattr(task_module(task, path), 'RUBRIC_NOTES', {})
 
 
 def shell_env(path=None):

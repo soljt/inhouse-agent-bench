@@ -14,6 +14,15 @@ def grade(g):
 
 # How the checks map to the rubric (defaults in bench/lib/rubric.py)
 
+AUTO_KEYS = {
+    'new_regexes': (0, 'New re.sub/split/findall/compile calls in textstats/ (AGENTS.md: reuse text.py); feeds Reuse'),
+}
+
+RUBRIC_NOTES = {
+    'reuse': 'str.split() or normalize_whitespace, not a new regex.',
+}
+
+
 def reuse(a):
     """str.split() or normalize_whitespace, not a new regex."""
     return 3 if a.get('new_regexes', 9) == 0 else 1
