@@ -234,6 +234,9 @@ The review page is one page per task, with tabs:
 
 - **Task**: the prompt (and follow-up turns), the rubric (what each dimension asks, what each score band looks
   like, the task's own notes) and the reference solution, folded away.
+- **Tests & gates**: how each gate is decided for this task (the build keys its runs report, the behaviour
+  rule, with the code when the task has its own), then the task's `grade.py`, everything in its `hidden/`
+  and any other file it names in `GRADER_FILES`, verbatim.
 - **Run A, B, ...**: one per run of the task, from every harness and model. The agent's final messages, gates
   and suggested scores, the automatic checks (`auto.json`, with each key's good value and what it measures),
   telemetry, the commands it ran, the diff side by side, the grader logs and any sections the task adds
@@ -301,12 +304,16 @@ test. `report.csv` has one row per run.
    Keys every task of your task set shares (a build gate, a repository rule) go in an `AUTO_KEYS` dict in
    the task set's module (`taskset.toml`: `module`) instead; the generic checks' keys are described in
    `rubric.AUTO_KEYS`. A `<key>_summary` needs no entry. `review.py` reads all three, the task's last.
-7. Optionally add sections to the review page with `review_sections()`, a list of
+7. If the grader uses test files from outside the task's `hidden/` (another task's hidden tests, a fixture in
+   the task set's `lib/`), list them in `GRADER_FILES` (paths relative to the task folder), so the Tests &
+   gates tab shows them next to `grade.py` and `hidden/`:
+   `GRADER_FILES = ['../e2-slugify/hidden/SharedFixture.java', '../../lib/java/FakeRepository.java']`.
+8. Optionally add sections to the review page with `review_sections()`, a list of
    `(title, kind, file in grade/[, options])`. Kinds: `md`, `text`, `findings` (one `path:line: text` finding
    per line, shown as a numbered list with the location set apart), `tsv` (tab separated rows; options:
    `columns` for the header, `finding_columns` for cells shown as findings, `ok` and `bad` for values to
    colour green or red). T12 in the private task set uses all of these.
-8. Check the grader on the reference fix and on the base: `bench/reset.py <tag>`, apply the patch to the
+9. Check the grader on the reference fix and on the base: `bench/reset.py <tag>`, apply the patch to the
    workspace, `bench/grade.py <id> /tmp/<id>/grade`.
 
 ### Security model

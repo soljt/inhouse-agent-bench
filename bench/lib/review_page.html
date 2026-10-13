@@ -48,6 +48,8 @@
   .md code, .loc, td code { background: var(--code); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
   .md pre code { padding: 0; background: none; }
   pre.text { white-space: pre-wrap; word-break: break-word; margin: 0; }
+  pre.code { background: var(--code); padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 13px; margin: 6px 0 0;
+             tab-size: 4; line-height: 1.45; }
   table.kv { border-collapse: collapse; font-size: 14px; }
   table.kv td, table.kv th { border-top: 1px solid var(--line); padding: 4px 16px 4px 0; vertical-align: top; text-align: left; }
   table.kv th { color: var(--muted); font-weight: 600; font-size: 13px; }
@@ -441,6 +443,29 @@ function buildTask(p) {
   }
 }
 
+// Tests & gates tab: how the gates are decided, then the grader and the hidden tests verbatim
+function buildTests(p) {
+  let [box] = section(p, 'tests-gates', 'Gates', 'Gates');
+  box.append(el('p', 'hint', 'A run must pass all three, or it scores 0. The checks below run in the sandbox after the '
+    + 'agent finishes; the agent never sees the hidden files.'));
+  const t = el('table', 'kv');
+  for (const g of info.gates) {
+    const tr = el('tr'); const td = el('td');
+    td.append(el('div', '', g.rule));
+    if (g.code) td.append(el('pre', 'code', g.code));
+    tr.append(el('td', '', g.name), td);
+    t.append(tr);
+  }
+  box.append(t);
+  info.grader_files.forEach((f, i) => {
+    const [b] = section(p, 'tests-f' + i, f.name, f.name.split('/').pop());
+    b.querySelector('h2').style.textTransform = 'none';
+    if (i === 0) b.append(el('p', 'hint', 'grade.py runs the checks that fill auto.json; below it, the functions that turn '
+      + 'them into gates and suggested scores (on 0 to 3, shown as 1 to 10).'));
+    b.append(el('pre', 'code', f.text));
+  });
+}
+
 // A run's tab: its sections, then its own grade card
 function buildRun(r, p) {
   const head = el('p', 'runhead');
@@ -581,6 +606,7 @@ document.getElementById('subtitle').textContent =
   `${data.runs.length} run${data.runs.length === 1 ? '' : 's'}${data.blind ? ', blind' : ''}`;
 document.title = 'Review ' + info.task;
 addTab('task', 'Task', 'prompt, rubric, reference', buildTask);
+addTab('tests', 'Tests & gates', 'the grader and the hidden tests, verbatim', buildTests);
 for (const r of data.runs) {
   const b = addTab(r.id, 'Run ' + r.label, r.who || r.header, p => buildRun(r, p));
   if (r.gate_failed.length) b.append(el('span', 'mark bad', '✗ gate'));

@@ -24,6 +24,7 @@ ranking of all of them). Runs that failed a gate score 0 and need no scores, but
 import datetime
 import glob
 import hashlib
+import inspect
 import json
 import os
 import random
@@ -308,7 +309,47 @@ def run_data(run_dir, s, blind, label):
     }
 
 
-def task_info(task, ts_path):
+def grader_files(task, ts_path):
+    """The files that decide a task's grade, verbatim: its grade.py, everything in hidden/, and the files its
+    GRADER_FILES names (paths relative to the task folder, e.g. another task's hidden tests it reuses).
+    Names are relative to the task set."""
+    tdir = taskset.task_dir(task, ts_path)
+    hooks = taskset.task_module(task, ts_path)
+    paths = [os.path.join(tdir, 'grade.py')]
+    paths += sorted(p for p in glob.glob(os.path.join(tdir, 'hidden', '**', '*'), recursive=True) if os.path.isfile(p))
+    paths += [os.path.normpath(os.path.join(tdir, p)) for p in getattr(hooks, 'GRADER_FILES', [])]
+    root = taskset.root(ts_path)
+    out = []
+    for path in dict.fromkeys(paths):
+        text = read(path, 200_000)
+        if '\0' in text:
+            text = '(binary file)'
+        out.append({'name': os.path.relpath(path, root), 'text': text})
+    return out
+
+
+def gate_rules(task, ts_path, group):
+    """How each gate is decided for this task: name, rule, and the code that decides it where the task has its
+    own. The build gate lists the build keys the task's runs report."""
+    hooks = taskset.task_module(task, ts_path)
+    docs = taskset.auto_keys(task, ts_path)
+    reported = set()
+    for run_dir, _ in group:
+        path = os.path.join(run_dir, 'grade', 'auto.json')
+        if os.path.exists(path):
+            reported.update(json.load(open(path)))
+    keys = [k for k in (taskset.build_keys(ts_path) or rubric.BUILD_KEYS) if k in reported]
+    builds = '; '.join(f'{k}: {docs[k][1]}' if k in docs else k for k in keys) or 'no build key reported: always passes'
+    if hasattr(hooks, 'behaviour'):
+        behaviour, code = 'the task\'s own rule, below', inspect.getsource(hooks.behaviour)
+    else:
+        behaviour, code = 'hidden_test_ok is true: the hidden tests (below) pass on the agent\'s code', ''
+    return [{'name': 'builds', 'rule': f'every one of these is true: {builds}', 'code': ''},
+            {'name': 'behaviour', 'rule': behaviour, 'code': code},
+            {'name': 'no harm', 'rule': 'your call: untick "no harm" in the grade form if the run did damage', 'code': ''}]
+
+
+def task_info(task, ts_path, group=()):
     """The Task tab: prompt, turns, reference solution and the rubric with the task's own notes."""
     tdir = taskset.task_dir(task, ts_path)
     turns = sorted(glob.glob(os.path.join(tdir, 'turns', '*.md')))
@@ -323,6 +364,8 @@ def task_info(task, ts_path):
         'dims': [{'name': d, **rubric.DIMENSION_HELP[d], 'note': taskset.rubric_notes(task, ts_path).get(d, '')}
                  for d in rubric.DIMENSIONS],
         'failure_tags': scorer.FAILURE_TAGS,
+        'gates': gate_rules(task, ts_path, group),
+        'grader_files': grader_files(task, ts_path),
     }
 
 
@@ -330,7 +373,7 @@ def page_html(task, group, blind, order, save_url):
     """The review page for the given runs of one task. order: run_dir -> sort key (blind: random)."""
     group = sorted(group, key=lambda rs: order(rs[0]))
     letters = [chr(ord('A') + i) if i < 26 else f'R{i + 1}' for i in range(len(group))]
-    data = {'info': task_info(task, group[0][1].get('taskset') if group else None),
+    data = {'info': task_info(task, group[0][1].get('taskset') if group else None, group),
             'runs': [run_data(r, s, blind, label) for (r, s), label in zip(group, letters)],
             'rank': len(group) > 1, 'blind': blind, 'save_url': save_url}
     data = json.dumps(data, default=str).replace('</', '<\\/')
