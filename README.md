@@ -234,22 +234,22 @@ whatever the agent sends through them.
   not the vLLM template. The vLLM template auto-starts a default gated model
   (crash-loops without an HF token), only offers `vllm-latest`, and runs no sshd,
   so SSH port forwarding doesn't work.
-- Secure Cloud, EU data center, 1x RTX PRO 6000 to start. Container disk ~80 GB.
-- **Global volume** for model weights only (no repos, logs or tokens). It's
-  mounted at `/workspace` as an object-storage-backed FUSE filesystem (`geesefs`,
-  shows as 1.0P in `df`). It does not allow `chmod`, symlinks and file locks are
-  unreliable, and access is billed per IOPS, so keep caches and venvs on local disk.
-  Check on each new pod: `df -h /workspace` should show the volume, not `overlay`.
+- Secure Cloud, EU data center, 1x RTX PRO 6000 to start.
+- **No volume.** Everything, weights included, lives on the container disk: downloading straight from
+  Hugging Face to it is fast, so there is nothing worth keeping between pods. Size the container disk for
+  the weights plus about 25 GB (venv, CUDA toolkit, caches): ~80 GB for Qwen3.8-27B, ~220 GB for
+  Qwen3.8-Flash-Next FP8. The container disk is wiped whenever the pod stops or restarts, including when
+  you change its disk size, so every start begins with the install and download steps below.
 - Expose TCP 22 only. Never expose port 8000 over HTTP: the HTTPS proxy terminates
   TLS on RunPod's side.
 - Connect with "SSH over exposed TCP" (`root@<ip> -p <port>`), not `ssh.runpod.io`,
   which doesn't support port forwarding.
-- Stop the pod when done; the volume keeps billing until it's deleted.
+- Stop or terminate the pod when done; either way nothing on it survives.
 
-### Install vLLM (on every new pod, a few minutes)
+### Install vLLM (on every pod start, a few minutes)
 
 ```bash
-export UV_CACHE_DIR=/root/.cache/uv XDG_CACHE_HOME=/root/.cache   # off /workspace
+export UV_CACHE_DIR=/root/.cache/uv XDG_CACHE_HOME=/root/.cache
 pip install uv
 uv venv /root/venv --python 3.12 && . /root/venv/bin/activate
 uv pip install "vllm==0.30.0"     # pinned; Qwen3.8 needs >= 0.17.0
@@ -260,22 +260,26 @@ uv pip install "vllm==0.30.0"     # pinned; Qwen3.8 needs >= 0.17.0
 apt-get update && apt-get install -y cuda-toolkit-13-0
 ```
 
-### Download weights (once, onto the volume)
+### Download weights (on every pod start, to the container disk)
 
-Plain folders instead of the HF cache, which needs symlinks and locks:
+Log in first (free account, read token from huggingface.co/settings/tokens) for higher rate limits. Type the
+token into the SSH shell, never into the RunPod template's env vars, which the web console shows.
 
 ```bash
-hf download Qwen/Qwen3.8-27B-FP8 --local-dir /workspace/models/qwen3.8-27b-fp8
+. /root/venv/bin/activate                  # the hf CLI comes with vLLM
+hf auth login                              # paste the token; answer "n" to the git credential question
+export HF_XET_HIGH_PERFORMANCE=1
+hf download Qwen/Qwen3.8-27B-FP8 --local-dir /root/models/qwen3.8-27b-fp8
 ```
 
-The repeated "Could not set the permissions ... Continuing without setting
-permissions" warnings are harmless (the volume has no permissions). Expect about
-30 min for 31 GB; set `HF_TOKEN` (free account) for higher rate limits.
+Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took about 3 min, peaking around
+6 GB/s. An interrupted download resumes when you run the same command again.
 
-| Model | Repo | Size |
-| --- | --- | --- |
-| Qwen3.8-27B FP8 | `Qwen/Qwen3.8-27B-FP8` | 31 GB |
-| Qwen3.8-27B NVFP4 | `nvidia/Qwen3.8-27B-NVFP4` | 22 GB |
+| Model | Repo | Size | Serving |
+| --- | --- | --- | --- |
+| Qwen3.8-27B FP8 | `Qwen/Qwen3.8-27B-FP8` | 31 GB | 1x RTX PRO 6000, below |
+| Qwen3.8-27B NVFP4 | `nvidia/Qwen3.8-27B-NVFP4` | 22 GB | 1x RTX PRO 6000 (untested) |
+| Qwen3.8-Flash-Next FP8 | `Qwen/Qwen3.8-Flash-Next-FP8` | 186 GB | Several GPUs and the dedicated vLLM image, see its [recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) |
 
 ### Serve (in tmux)
 
@@ -289,7 +293,7 @@ export VLLM_CACHE_ROOT=/root/.cache/vllm VLLM_NO_USAGE_STATS=1 HF_HUB_OFFLINE=1
 export CUDA_HOME=/usr/local/cuda-13.0 PATH=/usr/local/cuda-13.0/bin:$PATH
 export VLLM_KEY=<your key>
 
-vllm serve /workspace/models/qwen3.8-27b-fp8 \
+vllm serve /root/models/qwen3.8-27b-fp8 \
   --served-model-name qwen3.8-27b \
   --host 127.0.0.1 --port 8000 \
   --tensor-parallel-size 1 \
@@ -311,19 +315,14 @@ grep -E 'Available KV cache memory|GPU KV cache size|Maximum concurrency|Model l
 
 - If the smoke test fails on `/chat/completions`, try `--tool-call-parser qwen3_coder`.
   If only `/responses` fails, that's vLLM's Responses API: OpenCode works, Codex won't.
-- Record load time (global-volume speed), GPU KV cache size (4 agents x 131k needs
+- Record load time, GPU KV cache size (4 agents x 131k needs
   ~524k tokens) and max concurrency at 131k (want >= 4x).
 - During agent runs, `Prefix cache hit rate` in the log should climb on later turns.
-- If loading weights from `/workspace` is slow, copy the model folder to local disk
-  first (`cp -r /workspace/models/qwen3.8-27b-fp8 /root/models/`) and serve from there.
-  This only works while the model fits on the container disk.
 
 ### Troubleshooting
 
 - **SSH drops immediately with "container ... is not running":** the container is
   crash-looping (usually the start command). Stop the pod and check its logs.
-- **`Operation not permitted` / `failed to set permissions` during install:** a
-  cache or venv is on `/workspace`. Set `UV_CACHE_DIR`/`XDG_CACHE_HOME` as above.
 - **`RuntimeError: No supported CUDA architectures found for major versions [9, 10, 12]`:**
   FlashInfer is compiling with the template's CUDA 12.8 `nvcc`. Install the CUDA 13
   toolkit and set `CUDA_HOME`/`PATH` as above, in the same shell that starts vLLM.
