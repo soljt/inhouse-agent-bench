@@ -35,7 +35,7 @@ the vLLM adapter; the smoke test covers that.
 | `opencode/`, `codex/` | Harness configs, shared by the launchers and the benchmark container |
 | `scripts/` | `setup.sh` (install pinned harnesses), `smoke-test.sh` (tool call on both APIs), `env.sh` (loads `.env`, target names) |
 | `results/` | Model server reports (vLLM startup numbers) |
-| `bench/run.sh`, `bench/load.sh` | One benchmark run; a concurrency load test |
+| `bench/run.sh`, `bench/suite.py`, `bench/load.sh` | One benchmark run; every task, resumable; a concurrency load test |
 | `bench/container/` | The base image (Node 20, both harnesses, git, Python) task set images build on, and the entrypoint |
 | `bench/reset.py` | Resets the workspace to a task's base tag and runs the task set's after-reset hook |
 | `bench/grade.py`, `bench/lib/checks.py` | Grading runner and generic checks |
@@ -152,6 +152,22 @@ bench/load.sh oc local e1-word-count 1 2 4 8           # 1, then 2, 4, 8 agents 
 | `GRADE_WITH_NG=1` | Passed to graders as `with_ng` (a task set's GUI tasks: also run the Angular build, about 1 GB disk, 3 min) |
 | `BENCH_WORKSPACE`, `BENCH_DEPS`, `BENCH_RESULTS`, `BENCH_ENV` | Other workspace, deps folder, results folder, env file |
 | `LOAD_STAGGER`, `LOAD_TIMEOUT_MIN`, `BENCH_LOAD_DIR` | load.sh: seconds between starts, per run timeout, worktree folder |
+
+### Running a whole suite
+
+```bash
+bench/suite.py --dry-run          # what would run for the model in .env, and what is already done
+bench/suite.py                    # every task with oc and cx, unattended, one after the other
+bench/suite.py --harness cx e1-word-count e2-slugify    # some tasks, one harness
+touch ~/suite.stop                # from another terminal: stop after the current run
+```
+
+The suite skips each task and harness that already has a graded run for the same target, model, task set,
+`BENCH_VARIANT` and `BENCH_YOLO`, so stopping it (with `~/suite.stop`, or Ctrl+C: the unfinished run is not
+graded and runs again) and starting it again carries on where it left off. Runs marked exclude in review
+and load test runs don't count. A run over `--timeout-min` (45) is stopped, graded as it stands and marked
+`timed_out`. When `run.sh` refuses to start a run (model endpoint down, isolation or gitguard problem), the
+suite stops. Output also goes to `bench/results/suite-<yymmdd>.log`.
 
 ### Reviewing and reporting
 
