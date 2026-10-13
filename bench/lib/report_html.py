@@ -294,13 +294,17 @@ def load_section(loads):
             f'<div class="legend">{legend}</div><div class="charts">{charts}</div>' + ''.join(tables))
 
 
-def render(data, loads, pending, n_runs):
+def render(data, loads, pending, n_runs, overrides=()):
     """The whole page."""
     now = datetime.datetime.now()
     sections = []
     if data['models']:
         sections += [totals_section(data), model_sections(data)]
     sections.append(load_section(loads))
+    if overrides:
+        items = ''.join(f'<li><code>{esc(d)}</code>: {esc(why)}</li>' for d, why in overrides)
+        sections.append('<h2>Gate overrides</h2><p class="note">Runs that failed a gate the reviewer judged wrong for'
+                        f' them; scored as passed.</p><ul>{items}</ul>')
     if pending:
         items = ''.join(f'<li><code>{esc(d)}</code>: {esc(", ".join(p))}</li>' for d, p in pending)
         sections.append(f'<h2>Needs a human score</h2><p class="note"><code>bench/review.py next</code> (or'

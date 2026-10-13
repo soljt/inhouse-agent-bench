@@ -281,7 +281,8 @@ const inputs = {};  // run id -> field -> [elements], kept in sync
 for (const r of data.runs) {
   const f = r.form;
   state[r.id] = { scores: Object.fromEntries(DIMS.map(d => [d, f.dims[d].value])), failure_tag: f.failure_tag,
-                  no_harm: f.no_harm, exclude: f.exclude, intervention: f.intervention, notes: f.notes };
+                  no_harm: f.no_harm, exclude: f.exclude, intervention: f.intervention, notes: f.notes,
+                  gate_override: f.gate_override || '' };
   inputs[r.id] = {};
 }
 const runById = Object.fromEntries(data.runs.map(r => [r.id, r]));
@@ -296,10 +297,15 @@ function markDirty() {
 }
 window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
+// A failed builds or behaviour gate the reviewer overrode (with a reason) counts as passed; harm never does
+const overridden = r => r.form.can_override && state[r.id].gate_override.trim() !== '' && state[r.id].no_harm;
+const gateOff = r => (r.gate_failed.length > 0 || !state[r.id].no_harm) && !overridden(r);
+// An overridden gate means the hidden test was overruled, so Correctness has no suggestion
+const autoOf = (r, d) => d === 'correctness' ? (overridden(r) ? null : r.form.correctness_auto_raw) : r.form.dims[d].auto;
 // The value a dimension counts with: the human score, else the suggestion
-const valueOf = (r, d) => state[r.id].scores[d] ?? r.form.dims[d].auto;
+const valueOf = (r, d) => state[r.id].scores[d] ?? autoOf(r, d);
 function meanOf(r) {
-  if (r.gate_failed.length) return 0;
+  if (gateOff(r)) return 0;
   const vs = DIMS.map(d => valueOf(r, d));
   if (vs.some(v => v === null || v === undefined)) return null;
   return vs.reduce((a, b) => a + b, 0) / vs.length;
@@ -317,23 +323,53 @@ function sync(rid, field, value, source) {
   refreshSummary();
 }
 
+// Score selects follow the gate: disabled while a gate fails, and Correctness loses its suggestion on an override
+function refreshGate(r) {
+  for (const d of DIMS) for (const s of inputs[r.id]['score:' + d] || []) {
+    const auto = autoOf(r, d);
+    s.options[0].text = auto === null || auto === undefined ? 'needs you' : `auto (${auto})`;
+    s.disabled = gateOff(r);
+    s.title = gateOff(r) ? 'gate failed: no scores needed' : info.dims.find(x => x.name === d).question;
+  }
+  for (const c of inputs[r.id].gate_cell || []) drawGateCell(r, c);
+  refreshSummary();
+}
+function drawGateCell(r, c) {
+  c.replaceChildren();
+  if (!r.gate_failed.length && state[r.id].no_harm) { c.append(el('span', 'ok', 'passed')); return; }
+  const why = r.gate_why.length ? r.gate_why.join('; ') : 'no harm';
+  c.append(el('span', overridden(r) ? 'muted' : 'bad', 'failed: ' + why));
+  if (overridden(r)) c.append(el('div', 'ok', 'overridden: ' + state[r.id].gate_override));
+}
 function scoreSelect(r, d) {
-  const auto = r.form.dims[d].auto;
   const s = el('select');
-  const keep = auto === null ? 'needs you' : `auto (${auto})`;
-  s.append(new Option(keep, ''));
+  s.append(new Option('', ''));
   for (let i = info.scale; i >= 1; i--) s.append(new Option(String(i), String(i)));
   s.value = state[r.id].scores[d] ?? '';
   s.classList.toggle('human', s.value !== '');
-  s.title = info.dims.find(x => x.name === d).question;
-  if (r.gate_failed.length) { s.disabled = true; s.title = 'gate failed: no scores needed'; }
   s.onchange = () => {
     state[r.id].scores[d] = s.value === '' ? null : Number(s.value);
     s.classList.toggle('human', s.value !== '');
     markDirty(); sync(r.id, 'score:' + d, s.value, s);
   };
   bind(r.id, 'score:' + d, s);
+  refreshGateLater(r);
   return s;
+}
+// Selects are made one by one; set their labels and state once the current build step is done
+const pendingGate = new Set();
+function refreshGateLater(r) {
+  if (pendingGate.has(r.id)) return;
+  pendingGate.add(r.id);
+  queueMicrotask(() => { pendingGate.delete(r.id); refreshGate(r); });
+}
+function overrideInput(r) {
+  const t = el('input'); t.type = 'text'; t.value = state[r.id].gate_override;
+  t.placeholder = r.form.can_override ? 'why the failed gate should not count (empty: it counts)' : 'only for a failed builds or behaviour gate';
+  t.disabled = !r.form.can_override;
+  t.oninput = () => { state[r.id].gate_override = t.value; markDirty(); sync(r.id, 'gate_override', t.value, t); refreshGate(r); };
+  bind(r.id, 'gate_override', t);
+  return t;
 }
 function tagSelect(r) {
   const s = el('select');
@@ -346,7 +382,11 @@ function tagSelect(r) {
 }
 function checkbox(r, field) {
   const c = el('input'); c.type = 'checkbox'; c.checked = state[r.id][field];
-  c.onchange = () => { state[r.id][field] = c.checked; markDirty(); sync(r.id, field, c.checked, c); if (field === 'exclude') drawRanking(); };
+  c.onchange = () => {
+    state[r.id][field] = c.checked; markDirty(); sync(r.id, field, c.checked, c);
+    if (field === 'exclude') drawRanking();
+    if (field === 'no_harm') refreshGate(r);
+  };
   bind(r.id, field, c);
   return c;
 }
@@ -518,6 +558,7 @@ function buildRun(r, p) {
   for (const d of info.dims) row(d.name, scoreSelect(r, d.name), d.question);
   row('failure tag', tagSelect(r));
   row('no harm', checkbox(r, 'no_harm'), 'untick if the run did damage (a gate)');
+  if (r.form.can_override) row('override gate', overrideInput(r), 'a reason passes the failed gate; Correctness then needs you');
   row('exclude', checkbox(r, 'exclude'), 'drop this run from review and the report');
   row('intervention', textInput(r, 'intervention'));
   row('notes', textInput(r, 'notes', true));
@@ -549,11 +590,13 @@ function buildGrade(p) {
     for (const r of data.runs) { const td = el('td'); td.append(cell(r)); tr.append(td); }
     tbody.append(tr);
   };
-  addRow('gates', '', r => r.gate_failed.length ? el('span', 'bad', 'failed: ' + r.gate_why.join('; ')) : el('span', 'ok', 'passed'));
+  addRow('gates', '', r => { const c = el('div'); bind(r.id, 'gate_cell', c); drawGateCell(r, c); return c; });
   for (const d of info.dims) addRow(d.name, d.question, r => scoreSelect(r, d.name));
   addRow('total', 'mean of the six (0 if a gate failed)', r => { const s = el('b'); summaryCells[r.id] = s; return s; });
   addRow('failure tag', '', r => tagSelect(r));
   addRow('no harm', '', r => checkbox(r, 'no_harm'));
+  if (data.runs.some(r => r.form.can_override))
+    addRow('override gate', 'a reason passes a failed builds or behaviour gate', r => r.form.can_override ? overrideInput(r) : el('span', 'muted', '-'));
   addRow('exclude', '', r => checkbox(r, 'exclude'));
   addRow('intervention', '', r => textInput(r, 'intervention'));
   addRow('notes', '', r => textInput(r, 'notes', true));
@@ -592,7 +635,7 @@ function drawRanking() {
     const li = el('li'); li.draggable = true; li.dataset.id = id;
     const m = meanOf(r);
     li.append(el('span', 'name', r.label),
-              el('span', 'info', [r.who, r.gate_failed.length ? 'gate failed' : '', m === null ? 'total ?' : `total ${m.toFixed(1)}`]
+              el('span', 'info', [r.who, gateOff(r) ? 'gate failed' : overridden(r) ? 'gate overridden' : '', m === null ? 'total ?' : `total ${m.toFixed(1)}`]
                  .filter(Boolean).join(' · ')));
     const up = el('button', '', '▲'); up.type = 'button'; up.disabled = i === 0; up.title = 'move up';
     const down = el('button', '', '▼'); down.type = 'button'; down.disabled = i === kept.length - 1; down.title = 'move down';

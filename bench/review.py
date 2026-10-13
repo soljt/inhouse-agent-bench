@@ -287,6 +287,8 @@ def check_form(s, form):
             return f'{d}: score must be 1 to {rubric.SCALE} or empty'
     if form.get('failure_tag') not in [None] + scorer.FAILURE_TAGS:
         return 'unknown failure tag'
+    if str(form.get('gate_override') or '').strip() and not any(not s['gate'][k] for k in ('builds', 'behaviour')):
+        return 'a gate override needs a failed builds or behaviour gate'
     return None
 
 
@@ -306,6 +308,7 @@ def save_grades(run_dir, form, rank=KEEP_RANK, rank_n=None):
     h['exclude'] = form.get('exclude') is True
     h['intervention'] = str(form.get('intervention') or '')
     h['notes'] = str(form.get('notes') or '')
+    h['gate_override'] = str(form.get('gate_override') or '').strip()
     if rank != KEEP_RANK:
         h['rank'], h['rank_n'] = rank, rank_n
         h['ranked_at'] = datetime.datetime.now().isoformat(timespec='seconds')
@@ -353,6 +356,9 @@ def run_data(run_dir, s, blind, label):
             'failure_tag': h.get('failure_tag'), 'failure_tag_suggested': s['failure_tag_suggested'],
             'no_harm': h.get('no_harm', True) is not False, 'exclude': h.get('exclude') is True,
             'intervention': h.get('intervention', ''), 'notes': h.get('notes', ''),
+            'gate_override': h.get('gate_override', ''),
+            'can_override': any(not s['gate'][k] for k in ('builds', 'behaviour')),
+            'correctness_auto_raw': s['correctness_auto_raw'],
             'rank': h.get('rank') if h.get('scale') == rubric.SCALE else None,
         },
     }

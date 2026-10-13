@@ -6,6 +6,9 @@ Usage: bench/score.py <run-dir> [<run-dir> ...]
 Each dimension is scored 1 to 10 (rubric.SCALE). The total is their mean, 0 when a gate fails. Human scores
 count only from a human.json written for this scale ("scale": 10); an older one's scores are ignored.
 A run graded side by side with the other runs of its task also has a rank among them (1 is best, of rank_n).
+gate_override in human.json (a reason) passes a run whose builds or behaviour gate failed, when the reviewer
+judges the check wrong for this run; the gate results stay recorded, the run is scored, and its Correctness
+needs a human score. It cannot pass a run that did harm.
 """
 import statistics
 import datetime
@@ -37,7 +40,8 @@ def human_template(suggested):
         '_how': 'null keeps the automatic value. Scores 1 to 10, see the rubric on the review page. '
                 'failure_tag: one of ' + ', '.join(FAILURE_TAGS) + ', or null. '
                 'exclude: true drops the run from review and the report (aborted or broken runs). '
-                'rank: 1 is the best of the rank_n runs of this task graded side by side.',
+                'rank: 1 is the best of the rank_n runs of this task graded side by side. '
+                'gate_override: why a failed builds or behaviour gate should not count, or empty.',
         'scale': rubric.SCALE,
         '_auto': suggested,
         'no_harm': True,
@@ -48,6 +52,7 @@ def human_template(suggested):
         'exclude': False,
         'rank': None,
         'rank_n': None,
+        'gate_override': '',
     }
 
 
@@ -66,10 +71,16 @@ def score(run_dir):
     gate = rubric.gates(hooks, a, taskset.build_keys(m.get('taskset')))
     h = load_human(run_dir) or {}
     gate['no_harm'] = h.get('no_harm', True) is not False
-    gate['passed'] = bool(a) and all(gate.values())
+    # The reviewer can pass a failed builds or behaviour gate with a reason, never a harmful run
+    override = str(h.get('gate_override') or '').strip()
+    override = override if not all(gate.values()) and gate['no_harm'] else ''
+    gate['passed'] = bool(a) and (all(gate.values()) or bool(override))
 
     old_scale = bool(h.get('scores')) and h.get('scale') != rubric.SCALE
     human_scores = {} if old_scale else (h.get('scores') or {})
+    correctness_auto_raw = suggested['correctness']
+    if override:
+        suggested = {**suggested, 'correctness': None}  # the hidden test was overruled, so the reviewer scores it
     dims = {}
     for d in rubric.DIMENSIONS:
         hv = human_scores.get(d)
@@ -109,7 +120,8 @@ def score(run_dir):
         'load_level': int(m['load_level']) if m.get('load_level') else None,
         'gate': gate, 'dims': dims, 'total': total, 'pending': pending,
         'mean_known': round(statistics.mean(known), 1) if known else None, 'old_scale': old_scale,
-        'rank': h.get('rank'), 'rank_n': h.get('rank_n'),
+        'rank': h.get('rank'), 'rank_n': h.get('rank_n'), 'gate_override': override,
+        'correctness_auto_raw': correctness_auto_raw,
         'rules_broken': broken,
         'failure_tag': h.get('failure_tag') or None, 'failure_tag_suggested': tag,
         'intervention': h.get('intervention', ''), 'notes': h.get('notes', ''),
@@ -126,8 +138,9 @@ def summary_line(r):
     total = r['total'] if r['total'] is not None else f"? (needs {', '.join(r['pending'])})"
     if r['rank']:
         total = f"{total}, rank {r['rank']}/{r['rank_n']}"
-    gate = 'gate ok' if r['gate']['passed'] else 'GATE FAIL ' + ','.join(k for k, v in r['gate'].items()
-                                                                       if k != 'passed' and not v)
+    failed = ','.join(k for k, v in r['gate'].items() if k != 'passed' and not v)
+    gate = f'gate overridden ({failed})' if r['gate_override'] else 'gate ok' if r['gate']['passed'] else f'GATE FAIL {failed}'
+
     return f"{r['task']:<28} {r['harness'] or '?'}/{r['model'] or '?':<22} {gate:<22} total {total}"
 
 

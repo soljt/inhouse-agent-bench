@@ -245,7 +245,7 @@ The review page is one page per task, with tabs:
   (T12: its findings). Each tab ends with that run's grade form. Blind, the letters are shuffled and harness
   and model hidden.
 - **Grade & rank**: every run's scores side by side (the same fields as the run tabs, kept in sync), the
-  running total, and the ranking: order the runs from best to worst (drag, the arrows, or "Order by total"
+  running total, a gate override (below), and the ranking: order the runs from best to worst (drag, the arrows, or "Order by total"
   and then adjust). The page refuses to save until the runs are ranked.
 
 "Save and next task" writes each run's `<run>/grade/human.json` and moves on. A run is pending when a
@@ -258,6 +258,12 @@ pending; `exclude` drops a run (aborted, broken) from review, the ranking and th
 verification and merge-worthiness (human only). The total is their mean; a run that fails a gate (builds,
 behaviour = hidden test, no harm) scores 0 and needs no scores, but is still ranked. A human score always
 overrides the suggestion. Failure tags: bad tool call, loop, gave up, wrong fix, rule break, false claim.
+**Gate overrides.** When a run fails the builds or behaviour gate but you judge the check wrong for that run
+(say the agent solved it in a valid way the hidden test did not foresee), write the reason in "override
+gate". The run then counts as passed and is scored; the failed check stays recorded, its Correctness has no
+suggestion (you score it), and the report lists every override with its reason. A run that did harm cannot
+be overridden. If the check is wrong for every run, fix the hidden test and `bench/regrade.py` the task's
+runs instead, so past and future runs are judged alike.
 The rank (`rank` of `rank_n` in `human.json`) is kept apart from the total: scores say how good a run is on
 its own, the rank says which of the runs on the same task you would rather have. A `human.json` from the old
 0 to 3 scale (without `"scale": 10`) is ignored, so its run is graded again.

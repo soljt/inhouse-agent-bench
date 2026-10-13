@@ -215,6 +215,11 @@ def markdown(scores, data, loads):
                             rows))
             md.append('')
 
+    overrides = [s for s in scores if s['gate_override']]
+    if overrides:
+        md += ['', '## Gate overrides', '', 'Runs that failed a gate the reviewer judged wrong for them; scored as passed.', '']
+        md += [f"- `{s['_dir']}` ({', '.join(k for k, v in s['gate'].items() if k != 'passed' and not v)}): "
+               f"{s['gate_override']}" for s in overrides]
     pend = [s for s in scores if not s['complete']]
     if pend:
         md += ['', '## Needs a human score', '']
@@ -229,7 +234,7 @@ def write_csv(path, scores, load_runs):
     """One row per run."""
     fields = ['run', 'task', 'harness', 'target', 'model', 'variant', 'yolo', 'start', 'end', 'wall_min', 'load_group', 'load_level', 'auto_mean', 'gate_passed', 'builds', 'behaviour',
               'no_harm'] + DIMENSIONS + [d + '_source' for d in DIMENSIONS] + \
-             ['total', 'rank', 'rank_n', 'complete', 'rules_broken', 'failure_tag', 'failure_tag_suggested', 'model_requests',
+             ['total', 'rank', 'rank_n', 'gate_override', 'complete', 'rules_broken', 'failure_tag', 'failure_tag_suggested', 'model_requests',
               'input_tokens', 'output_tokens', 'peak_context', 'tool_calls', 'tool_errors', 'nonzero_exits',
               'request_s_mean', 'output_tps', 'verify_commands', 'unbacked_claim', 'intervention', 'notes']
     with open(path, 'w', newline='') as f:
@@ -257,7 +262,8 @@ def main(argv):
     os.makedirs(out_dir, exist_ok=True)
     open(os.path.join(out_dir, 'report.md'), 'w').write('\n'.join(md) + '\n')
     pending = [(s['_dir'], s['pending']) for s in scores if not s['complete']]
-    open(os.path.join(out_dir, 'report.html'), 'w').write(report_html.render(data, loads, pending, len(scores)))
+    overrides = [(s['_dir'], s['gate_override']) for s in scores if s['gate_override']]
+    open(os.path.join(out_dir, 'report.html'), 'w').write(report_html.render(data, loads, pending, len(scores), overrides))
     write_csv(os.path.join(out_dir, 'report.csv'), scores, load_runs)
     print('\n'.join(md))
     print(f"\nWritten {os.path.join(out_dir, 'report.md')}, report.html and report.csv")
