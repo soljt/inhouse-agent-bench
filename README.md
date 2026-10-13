@@ -41,6 +41,7 @@ the vLLM adapter; the smoke test covers that.
 | `bench/grade.py`, `bench/lib/checks.py` | Grading runner and generic checks |
 | `bench/score.py`, `bench/lib/rubric.py` | Gates and score suggestions from a run's checks |
 | `bench/lib/taskset.py` | Finds and reads the task set: the contract between the framework and a task set |
+| `bench/vllm_stats.py` | Throughput and KV cache stats from a vLLM server log |
 | `bench/review.py`, `bench/report.py`, `bench/regrade.py` | Human review in the browser; comparison report; grading again |
 | `bench/sandbox.py`, `bench/agentnet.py`, `bench/gitguard.py`, `bench/egress-proxy.py` | Isolation (see Security model) |
 | `bench/results/` | Run folders and reports (gitignored) |
@@ -168,6 +169,47 @@ graded and runs again) and starting it again carries on where it left off. Runs 
 and load test runs don't count. A run over `--timeout-min` (45) is stopped, graded as it stands and marked
 `timed_out`. When `run.sh` refuses to start a run (model endpoint down, isolation or gitguard problem), the
 suite stops. Output also goes to `bench/results/suite-<yymmdd>.log`.
+
+### Load tests
+
+A load test measures how the setup copes with several agents at once, not how good their work is. It assumes
+quality doesn't depend on load and measures the two separately, so its runs are graded automatically but
+never reviewed, and never count as done for `suite.py`.
+
+```bash
+bench/load.sh oc local e1-word-count 1 2 4 8     # 1 agent, then 2, 4 and 8 at once (15 runs)
+```
+
+- Use a short task that is graded fully automatically (T9, T10, T11 in the private task set). Tasks that need
+  the Maven registry (T2) are refused, because the registry has a fixed port.
+- Don't run a suite at the same time: both would compete for the GPUs.
+- Each call makes a new group, `bench/results/load-<time>/` (launcher logs and `report.md`), and its runs are
+  ordinary run folders named `...-L<level>w<slot>`, so nothing is overwritten. `bench/report.py` shows every
+  group in its "Load tests" section (`--load <group>` for one).
+
+The report is measured from the agents' side (their transcripts), one row per concurrency level:
+
+| Column | Meaning |
+| --- | --- |
+| gates, auto /12 | Runs passing the gates; automatic subtotal (correctness, procedure, reuse, scope). A sanity check that load didn't break the work |
+| wall min | Time per run, tool time included |
+| s per request | Time per model request |
+| out tok/s per agent | Output tokens per second per agent, model time only (prefill included) |
+| aggregate out tok/s | All agents' output tokens over the level's wall clock: the server's useful throughput |
+
+What it can't see is the server's side: KV cache use, requests queued for room, prefill throughput. For
+that, summarise the vLLM log of the same time window. The log uses the pod's clock, which on RunPod is UTC
+(check with `date` there): take the load test's start and end from its runs and convert them.
+
+```bash
+ssh root@<pod-ip> -p <port> -i ~/.ssh/<key> cat /root/vllm.log | bench/vllm_stats.py --since <start> --until <end>
+```
+
+It prints the startup numbers (model memory and KV cache per GPU, maximum concurrency) and, from vLLM's
+10-second stats lines, a table per number of running requests: generation throughput in total and per
+request, prompt throughput, KV cache usage and the most requests waiting. Requests waiting means the server
+is full (KV cache or `--max-num-seqs`): the concurrency where that starts is the setup's limit. Record both
+tables with the model's server report in `results/`.
 
 ### Reviewing and reporting
 
