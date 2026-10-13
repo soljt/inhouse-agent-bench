@@ -250,17 +250,58 @@ whatever the agent sends through them.
   not the vLLM template. The vLLM template auto-starts a default gated model
   (crash-loops without an HF token), only offers `vllm-latest`, and runs no sshd,
   so SSH port forwarding doesn't work.
-- Secure Cloud, EU data center, 1x RTX PRO 6000 to start.
+- Secure Cloud, EU data center, sized per model:
+
+  | Model | GPUs | Container disk | Host RAM |
+  | --- | --- | --- | --- |
+  | Qwen3.8-27B FP8 | 1x RTX PRO 6000 | ~80 GB | any |
+  | Qwen3.8-Flash-Next FP8 | 2x RTX PRO 6000 (tight) or 4x (comfortable), one machine | ~220 GB | 128 GB or more: its 51 GB lookup table lives in RAM |
+
 - **No volume.** Everything, weights included, lives on the container disk: downloading straight from
-  Hugging Face to it is fast, so there is nothing worth keeping between pods. Size the container disk for
-  the weights plus about 25 GB (venv, CUDA toolkit, caches): ~80 GB for Qwen3.8-27B, ~220 GB for
-  Qwen3.8-Flash-Next FP8. The container disk is wiped whenever the pod stops or restarts, including when
-  you change its disk size, so every start begins with the install and download steps below.
+  Hugging Face to it is fast, so there is nothing worth keeping between pods. The container disk is wiped
+  whenever the pod stops or restarts, including when you change its disk size, so every start begins with
+  the steps below.
 - Expose TCP 22 only. Never expose port 8000 over HTTP: the HTTPS proxy terminates
   TLS on RunPod's side.
 - Connect with "SSH over exposed TCP" (`root@<ip> -p <port>`), not `ssh.runpod.io`,
-  which doesn't support port forwarding.
+  which doesn't support port forwarding. The port changes when the pod restarts.
 - Stop or terminate the pod when done; either way nothing on it survives.
+
+### Check the pod (every start)
+
+```bash
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+free -g | head -2
+df -h /root
+```
+
+Expect one line per GPU you ordered, each `NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB`, and RAM
+and disk as in the table above.
+
+With several GPUs, also check how they are connected. The model is split across them, and they exchange
+partial results after every layer; RTX PRO 6000s have no NVLink, so that goes over PCIe:
+
+```bash
+nvidia-smi topo -m          # the entry between each pair of GPUs
+nvidia-smi topo -p2p r      # whether they can copy to each other directly
+```
+
+`topo -m` prints a matrix like this one (2 GPUs on one PCIe switch):
+
+```
+        GPU0    GPU1    CPU Affinity    NUMA Affinity
+GPU0     X      PIX     0-47            0
+GPU1    PIX      X      0-47            0
+```
+
+| Entry | Means | Verdict |
+| --- | --- | --- |
+| `PIX`, `PXB` | Same PCIe switch | Best |
+| `NODE` | Same CPU, different PCIe root ports | Fine |
+| `SYS` | Different CPU sockets: traffic crosses between them | Slow: redeploy for another machine |
+
+`topo -p2p r` should show `OK` between every pair. `NS` (not supported) still works, but the GPUs then copy
+through host memory, which is slower; see Troubleshooting if startup hangs.
 
 ### Install vLLM (on every pod start, a few minutes)
 
@@ -268,13 +309,17 @@ whatever the agent sends through them.
 export UV_CACHE_DIR=/root/.cache/uv XDG_CACHE_HOME=/root/.cache
 pip install uv
 uv venv /root/venv --python 3.12 && . /root/venv/bin/activate
-uv pip install "vllm==0.30.0"     # pinned; Qwen3.8 needs >= 0.17.0
+uv pip install "vllm==0.30.0"     # pinned; Qwen3.8-27B needs >= 0.17.0, Flash-Next >= 0.30.0
 
 # vLLM 0.30.0 ships PyTorch built for CUDA 13.0, but the template's nvcc is 12.8,
 # which can't build FlashInfer's FP8 KV-cache kernels for the RTX PRO 6000 (sm_120).
 # Install a matching CUDA 13 toolkit (~5 min). Skip if `nvcc --version` already says 13.x.
 apt-get update && apt-get install -y cuda-toolkit-13-0
 ```
+
+Flash-Next runs on stable vLLM 0.30.0 and later, but its [recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next)
+is tuned and tested on nightly builds; if the pinned version fails to load it, the recipe's Install section
+generates the nightly install command.
 
 ### Download weights (on every pod start, to the container disk)
 
@@ -286,6 +331,7 @@ token into the SSH shell, never into the RunPod template's env vars, which the w
 hf auth login                              # paste the token; answer "n" to the git credential question
 export HF_XET_HIGH_PERFORMANCE=1
 hf download Qwen/Qwen3.8-27B-FP8 --local-dir /root/models/qwen3.8-27b-fp8
+hf download Qwen/Qwen3.8-Flash-Next-FP8 --local-dir /root/models/qwen3.8-flash-next-fp8   # instead, for Flash-Next
 ```
 
 Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took about 3 min, peaking around
@@ -295,20 +341,34 @@ Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took a
 | --- | --- | --- | --- |
 | Qwen3.8-27B FP8 | `Qwen/Qwen3.8-27B-FP8` | 31 GB | 1x RTX PRO 6000, below |
 | Qwen3.8-27B NVFP4 | `nvidia/Qwen3.8-27B-NVFP4` | 22 GB | 1x RTX PRO 6000 (untested) |
-| Qwen3.8-Flash-Next FP8 | `Qwen/Qwen3.8-Flash-Next-FP8` | 186 GB | Several GPUs and the dedicated vLLM image, see its [recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) |
+| Qwen3.8-Flash-Next FP8 | `Qwen/Qwen3.8-Flash-Next-FP8` | 186 GB | 2 or 4x RTX PRO 6000, below (untested) |
 
-### Serve (in tmux)
+### Serve: common to both models
 
-`--served-model-name` must match `LOCAL_MODEL`, and `VLLM_KEY` must match
-`LOCAL_API_KEY` (generate with `openssl rand -hex 32`). Set the key in the
-SSH shell, not in the RunPod template's env vars, which the web console shows.
+`--served-model-name` must match `LOCAL_MODEL` in `.env`, and `VLLM_KEY` must match
+`LOCAL_API_KEY` (generate with `openssl rand -hex 32`). Set the key in the SSH
+shell, not in the RunPod template's env vars. The model name also goes into every run folder's name, so each
+model's runs and report rows stay apart. Start the server in tmux, after this in the same shell:
 
 ```bash
 . /root/venv/bin/activate
 export VLLM_CACHE_ROOT=/root/.cache/vllm VLLM_NO_USAGE_STATS=1 HF_HUB_OFFLINE=1
 export CUDA_HOME=/usr/local/cuda-13.0 PATH=/usr/local/cuda-13.0/bin:$PATH
 export VLLM_KEY=<your key>
+```
 
+It's ready at `Application startup complete`. Then pull the numbers worth recording out of the log:
+
+```bash
+grep -E 'Available KV cache memory|GPU KV cache size|Maximum concurrency|Model loading took|Loading weights took|[Aa]ttention backend|Using .* backend|startup complete' /root/vllm.log | grep -v Initializing | cut -c1-200
+```
+
+Then, on your machine: the SSH tunnel (see Use), `scripts/smoke-test.sh` (expect PASS twice) and
+`bench/suite.py --dry-run` to see what a suite would run for this model.
+
+### Serve: Qwen3.8-27B on 1 GPU
+
+```bash
 vllm serve /root/models/qwen3.8-27b-fp8 \
   --served-model-name qwen3.8-27b \
   --host 127.0.0.1 --port 8000 \
@@ -322,12 +382,9 @@ vllm serve /root/models/qwen3.8-27b-fp8 \
   2>&1 | tee /root/vllm.log
 ```
 
-Startup takes a few minutes; it's ready at `Application startup complete`. Then
-pull the numbers worth recording out of the log (one line):
-
-```bash
-grep -E 'Available KV cache memory|GPU KV cache size|Maximum concurrency|Model loading took|Loading weights took|[Aa]ttention backend|Using .* backend|startup complete' /root/vllm.log | grep -v Initializing | cut -c1-200
-```
+Expect, from the first serve (`results/2026-10-07_qwen3.8-27b-fp8_1x-rtx-pro-6000.md`): model loading
+28.5 GiB, KV cache 54.2 GiB or 1,648,594 tokens, maximum concurrency 12.6x at 131,072 tokens, attention backend
+FlashInfer, about 5 min from start to ready (loading from the old volume; local disk is quicker).
 
 - If the smoke test fails on `/chat/completions`, try `--tool-call-parser qwen3_coder`.
   If only `/responses` fails, that's vLLM's Responses API: OpenCode works, Codex won't.
@@ -335,8 +392,59 @@ grep -E 'Available KV cache memory|GPU KV cache size|Maximum concurrency|Model l
   ~524k tokens) and max concurrency at 131k (want >= 4x).
 - During agent runs, `Prefix cache hit rate` in the log should climb on later turns.
 
+### Serve: Qwen3.8-Flash-Next on 2 or 4 GPUs (untested on RTX PRO 6000)
+
+Set `LOCAL_MODEL=qwen3.8-flash-next` in `.env` first. On a 4-GPU pod use `--tensor-parallel-size 4`.
+
+```bash
+vllm serve /root/models/qwen3.8-flash-next-fp8 \
+  --served-model-name qwen3.8-flash-next \
+  --host 127.0.0.1 --port 8000 \
+  --tensor-parallel-size 2 \
+  --enable-expert-parallel \
+  --max-model-len 131072 \
+  --max-num-seqs 256 \
+  --gpu-memory-utilization 0.90 \
+  --kv-cache-dtype fp8 --attention-config.indexer_kv_dtype fp8 \
+  --limit-mm-per-prompt '{"image":0,"video":0}' \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
+  --api-key "$VLLM_KEY" \
+  2>&1 | tee /root/vllm.log
+```
+
+Why these settings, from the recipe:
+
+- **Expert parallelism** (`--enable-expert-parallel`): with tensor parallelism, this is the recipe's recommended
+  setup and faster than tensor parallelism alone. Pipeline parallelism is not supported.
+- **The lookup table stays in host RAM:** vLLM offloads it by default (`--engram-config '{"cpu_offload":true}'`
+  says so explicitly).
+- **`--max-num-seqs 256`** avoids a cache capacity error at startup.
+- **`--limit-mm-per-prompt`** turns off image and video input; the agents only send text.
+- **131,072 context** is the same as the 27B, so the runs compare; the model's native maximum is 262,144.
+- **MTP speculative decoding** is left off until the plain setup works. Then add
+  `--speculative-config '{"method":"mtp","num_speculative_tokens":3}'`, which costs memory, and give those
+  runs `BENCH_VARIANT=mtp3`.
+
+Expect (estimates, nobody has run this here yet):
+
+- The startup log lists 2 (or 4) workers, one per GPU, and loads 186 GB from local disk.
+- Weights take about 63 GiB per GPU at TP2 or 32 GiB at TP4 (134 GB without the lookup table, split evenly).
+- At TP2 that leaves about 20 GiB per GPU for the KV cache, activations and CUDA graphs. Four agents at
+  131k tokens need about 7 GB of KV cache in total (12 of 48 layers keep one, ~14 KB per token at FP8).
+- Maximum concurrency at 131,072 tokens should be 4x or more.
+- Several minutes from start to ready.
+
 ### Troubleshooting
 
+- **Flash-Next: `no kernel image is available for execution on the device`, or another startup error in a GPU
+  kernel:** the risk of a card nobody validated it on (sm_120). Try in this order: `--moe-backend triton`,
+  then `--enforce-eager` (no CUDA graphs: slower, but avoids graph capture), then a nightly vLLM build.
+- **Flash-Next: out of memory while loading:** check the offload is on (add `--engram-config
+  '{"cpu_offload":true}'`), lower `--max-model-len`, or use 4 GPUs.
+- **Flash-Next: cache capacity error at startup:** keep `--max-num-seqs 256`.
+- **Several GPUs: startup hangs while the workers connect:** often missing direct GPU copies (`NS` in
+  `nvidia-smi topo -p2p r`). Start again with `NCCL_P2P_DISABLE=1` in the environment.
 - **SSH drops immediately with "container ... is not running":** the container is
   crash-looping (usually the start command). Stop the pod and check its logs.
 - **`RuntimeError: No supported CUDA architectures found for major versions [9, 10, 12]`:**
@@ -347,5 +455,7 @@ grep -E 'Available KV cache memory|GPU KV cache size|Maximum concurrency|Model l
 - **OpenCode hangs silently:** the tunnel is probably down; it retries without
   printing an error.
 
-Sources: [model card](https://huggingface.co/Qwen/Qwen3.8-27B),
-[vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-27B).
+Sources: Qwen3.8-27B [model card](https://huggingface.co/Qwen/Qwen3.8-27B) and
+[vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-27B); Qwen3.8-Flash-Next
+[model card](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8) and
+[vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) (as of 2026-10-13).
