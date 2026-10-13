@@ -8,6 +8,8 @@ rescore. The previous auto.json is kept as grade/auto.prev.json; human.json is l
 The workspace (default: the task set's) is reset, so it refuses to run while a benchmark container is up.
 Grading runs in the sandbox, like after a run (see grade.py); git on the host runs without hooks.
 A task whose result is not in a diff (T2: git remotes and a registry) sets REGRADE_FROM_DIFF = False in its grade.py.
+Keys a diff cannot reproduce (a check of untracked generated files, say) are listed in REGRADE_KEEP in the
+task's grade.py; their values are taken over from the previous auto.json.
 """
 import json
 import os
@@ -63,9 +65,22 @@ def regrade(run_dir, ws):
     if os.path.exists(auto):
         shutil.copyfile(auto, os.path.join(gdir, 'auto.prev.json'))
     grader.grade_in_sandbox(task, gdir, ws, with_ng=bool(os.environ.get('GRADE_WITH_NG')), stdout=subprocess.DEVNULL)
+    keep_previous(task, gdir)
     if gitguard.check(ws, run_dir=run_dir):
         print(f'{run_dir}: grading changed the workspace .git; restored, evidence in {run_dir}/gitguard')
     return None
+
+
+def keep_previous(task, gdir):
+    """Takes the task's REGRADE_KEEP keys over from auto.prev.json: checks a diff cannot reproduce."""
+    keep = getattr(taskset.task_module(task), 'REGRADE_KEEP', [])
+    prev_path, auto_path = os.path.join(gdir, 'auto.prev.json'), os.path.join(gdir, 'auto.json')
+    if not keep or not os.path.exists(prev_path) or not os.path.exists(auto_path):
+        return
+    prev, auto = json.load(open(prev_path)), json.load(open(auto_path))
+    auto.update({k: prev[k] for k in keep if k in prev})
+    with open(auto_path, 'w') as f:
+        f.write(json.dumps(dict(sorted(auto.items())), indent=2) + '\n')
 
 
 def changes(run_dir):

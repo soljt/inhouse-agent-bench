@@ -295,7 +295,9 @@ test. `report.csv` has one row per run.
    `out_of_scope_files`, and there is no reuse suggestion. Optional functions:
    `behaviour(auto)`, `correctness(auto)`, `reuse(auto)`, `procedure(auto, score, broken)`. These work on a
    coarse 0 to 3 scale (`band` and `misses` help); the suggestion shown is mapped onto 1 to 10 (0, 1, 2, 3
-   become 1, 4, 7, 10). `REGRADE_FROM_DIFF = False` when the result is not in the workspace diff.
+   become 1, 4, 7, 10). `REGRADE_FROM_DIFF = False` when the result is not in the workspace diff, and
+   `REGRADE_KEEP = [...]` for keys a regrade cannot reproduce from the diff (a check of untracked, generated
+   files): `bench/regrade.py` takes those over from the previous `auto.json`.
 6. Tell the reviewer what your checks mean, in the same `grade.py`. Without this the review page lists a key
    with no explanation and no colour:
    ```python
