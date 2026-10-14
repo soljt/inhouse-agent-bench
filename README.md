@@ -520,7 +520,7 @@ Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took a
 | Qwen3.8-27B FP8 | `Qwen/Qwen3.8-27B-FP8` | 31 GB | 1x RTX PRO 6000, below |
 | Qwen3.8-27B NVFP4 | `nvidia/Qwen3.8-27B-NVFP4` | 22 GB | 1x RTX PRO 6000 (untested) |
 | Qwen3.8-Flash-Next FP8 | `Qwen/Qwen3.8-Flash-Next-FP8` | 186 GB | 2 or 4x RTX PRO 6000, below (untested) |
-| GLM-5.3-Flash FP8 | `zai-org/GLM-5.3-Flash` | 328 GB | 4x RTX PRO 6000, below (untested) |
+| GLM-5.3-Flash FP8 | `zai-org/GLM-5.3-Flash` | 328 GB | 4x RTX PRO 6000, below |
 | GLM-5.3-Flash NVFP4 | `RedHatAI/GLM-5.3-Flash-NVFP4` | ~200 GB | 4x RTX PRO 6000, fallback if FP8 doesn't fit |
 
 ### Serve: common to every model
@@ -615,9 +615,11 @@ Expect (estimates, nobody has run this here yet):
 - Maximum concurrency at 131,072 tokens should be 4x or more.
 - Several minutes from start to ready.
 
-### Serve: GLM-5.3-Flash on 4 GPUs (untested on RTX PRO 6000)
+### Serve: GLM-5.3-Flash on 4 GPUs
 
-Set `LOCAL_MODEL=glm-5.3-flash` in `.env` first, and install vLLM 0.31.0 (see Install vLLM).
+First served 2026-10-14 on 4x RTX PRO 6000 with vLLM 0.31.0. Set `LOCAL_MODEL=glm-5.3-flash` in `.env`
+first (the smoke test fails with "model ... does not exist" when it doesn't match `--served-model-name`), and
+install vLLM 0.31.0 (see Install vLLM).
 
 ```bash
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
@@ -627,8 +629,7 @@ vllm serve /root/models/glm-5.3-flash-fp8 \
   --tensor-parallel-size 4 \
   --max-model-len 131072 \
   --max-num-seqs 16 \
-  --gpu-memory-utilization 0.95 \
-  --kv-cache-dtype fp8 \
+  --kv-cache-memory=8000000000 \
   --no-enable-flashinfer-autotune \
   --reasoning-parser glm47 \
   --enable-auto-tool-choice --tool-call-parser glm47 \
@@ -636,50 +637,56 @@ vllm serve /root/models/glm-5.3-flash-fp8 \
   2>&1 | tee /root/vllm.log
 ```
 
-FP8 fits on 4 GPUs, with less room to spare than the Qwen models. The memory budget, across all four:
+FP8 weights fit on 4 GPUs with a small KV cache. Per GPU, from the first serve (at
+`--gpu-memory-utilization 0.95`, before `--kv-cache-memory`):
 
-| | GB |
+| Per GPU | GiB |
 | --- | --- |
-| 4 x 97,887 MiB | 410 |
-| What vLLM may use at `--gpu-memory-utilization 0.95` | 390 |
-| Weights | -328 |
-| Activations, CUDA graphs, NCCL buffers (about 4 to 5 GB per GPU) | -18 |
-| **Left for the KV cache** | **about 44** |
+| Memory vLLM sees | 94.97 |
+| Weights (`Model loading took`) | 76.91 |
+| Weights plus memory outside PyTorch | 78.33 |
+| Peak activations, measured while profiling | 6.32 |
+| CUDA graphs | 0.09 |
+| KV cache at `--gpu-memory-utilization 0.95` | 5.57 |
+| KV cache that would fill the GPU completely (vLLM's own suggestion) | about 9.1 |
 
-The model keeps a compressed KV cache in 11 of its 45 layers: about 7 KB per token in theory, but vLLM runs
-have used 30 to 44 KB per token across the GPUs, so plan with 40 KB (46 KB with a BF16 cache). 44 GB holds
-about a million tokens; four agents at 131,072 tokens need 524,288.
+At 0.95 the KV cache held 679,191 tokens, `Maximum concurrency for 131,072 tokens per request: 5.18x`: about
+35 KB per token across the four GPUs (8.8 KB on each), with a BF16 cache. `--kv-cache-memory` sets the KV
+cache's size directly instead of as a share of the GPU: 8,000,000,000 bytes (7.45 GiB) gave 909,560 tokens,
+6.94x, leaving about 1.7 GiB per GPU spare.
 
 Why these settings:
 
+- **No `--kv-cache-dtype fp8`:** it fails on this card with `pe_dim must be 64 for fp8_ds_mla`. vLLM's FP8
+  layout for this kind of cache (MLA) expects a 64-number position part per token, which GLM-5.3-Flash
+  doesn't have. The cache stays BF16, which is also slightly better quality.
+- **`--kv-cache-memory=8000000000`** instead of `--gpu-memory-utilization`: the share left over after the
+  weights and activations is small, so setting the KV cache's size directly gets a third more of it.
 - **`--max-model-len 131072`** is the same context as the Qwen runs, so the runs compare.
-- **`--max-num-seqs 16`** caps the batch, which shrinks the CUDA graphs and activation memory that come out
-  of the KV cache's share. Raise it if a load test runs more than 16 agents at once.
+- **`--max-num-seqs 16`** caps the batch, which shrinks the CUDA graphs and activation memory. Raise it if a
+  load test runs more than 16 agents at once.
 - **`--no-enable-flashinfer-autotune`**: FlashInfer's tuning step hung for 11 minutes on a 4x RTX PRO 6000 run.
 - **`--reasoning-parser glm47`, `--tool-call-parser glm47`** are the vLLM recipe's. RedHatAI's NVFP4 model
   card uses `--reasoning-parser glm45`; try it if thinking text shows up in the answers.
-- **`VLLM_ENGINE_READY_TIMEOUT_S=3600`**: loading 328 GB and compiling takes longer than vLLM's default wait.
-- **MTP speculative decoding** is left off: its draft weights and cache come out of the same tight budget.
-  Once the plain setup works and the KV cache has room, try
-  `--speculative-config '{"method":"mtp","num_speculative_tokens":3}'` with `BENCH_VARIANT=mtp3`.
+- **`VLLM_ENGINE_READY_TIMEOUT_S=3600`**: profiling, compiling and warming up took about 4 minutes
+  (`init engine ... took 247 s`), longer than some of vLLM's default waits.
+- **MTP speculative decoding** is left off: its draft weights and cache would come out of the same small
+  budget.
 
-Check in the log, before the smoke test:
-
-- `Available KV cache memory`: expect about 10 GiB per GPU.
-- `Maximum concurrency for 131,072 tokens per request`: expect about 7x; want 4x or more.
-
-If it doesn't fit, see Troubleshooting.
+Expect, from the first serve: attention backend `FLASHINFER_MLA_SPARSE_SM120`, weights read in about 15 s from
+the container disk (`Loading weights took`), and `GPU KV cache size: 909,560 tokens, Maximum concurrency for
+131,072 tokens per request: 6.94x` with `--kv-cache-memory=8000000000` (5.18x at 0.95).
 
 ### Troubleshooting
 
-- **GLM-5.3-Flash: out of memory at startup (loading or CUDA graph capture):** lower
-  `--gpu-memory-utilization` to 0.93.
+- **GLM-5.3-Flash: out of memory at startup or under load:** lower `--kv-cache-memory` (6,000,000,000 is
+  close to what 0.95 gave), or go back to `--gpu-memory-utilization 0.95`.
 - **GLM-5.3-Flash: maximum concurrency below 4x:** lower `--max-model-len` to 100000 (shorter than the Qwen
   runs; give them `BENCH_VARIANT=ctx100k`), or serve the NVFP4 weights (`RedHatAI/GLM-5.3-Flash-NVFP4`, or
   `local-inference-lab/GLM-5.3-Flash-NVFP4` which a 4x RTX PRO 6000 run used) with `BENCH_VARIANT=nvfp4`.
-- **GLM-5.3-Flash: startup error about the KV cache dtype or sparse MLA:** the recipe doesn't cover sm_120.
-  Drop `--kv-cache-dtype fp8` first (the cache then takes about 15% more), then try `--enforce-eager`. A
-  sparse MLA initialization error can also mean FlashInfer is older than 0.6.18.
+- **GLM-5.3-Flash: `pe_dim must be 64 for fp8_ds_mla`:** remove `--kv-cache-dtype fp8` (see the serve
+  section). Another startup error in sparse MLA can mean FlashInfer is older than 0.6.18; after that, try
+  `--enforce-eager`.
 - **Several GPUs: slow prompt processing, `NS` in `nvidia-smi topo -p2p r`:** the GPUs can't copy to each
   other directly, often because the host's IOMMU blocks it (fixed with the `iommu=pt` kernel parameter,
   which a rented pod can't change). It still works through host memory; a 4x RTX PRO 6000 GLM-5.3-Flash run
