@@ -369,6 +369,7 @@ whatever the agent sends through them.
   | --- | --- | --- | --- |
   | Qwen3.8-27B FP8 | 1x RTX PRO 6000 | ~80 GB | any |
   | Qwen3.8-Flash-Next FP8 | 2x RTX PRO 6000 (tight) or 4x (comfortable), one machine | ~220 GB | 128 GB or more: its 51 GB lookup table lives in RAM |
+  | GLM-5.3-Flash FP8 | 4x RTX PRO 6000, one machine | ~400 GB | any |
 
 - **No volume.** Everything, weights included, lives on the container disk: downloading straight from
   Hugging Face to it is fast, so there is nothing worth keeping between pods. The container disk is wiped
@@ -423,6 +424,7 @@ export UV_CACHE_DIR=/root/.cache/uv XDG_CACHE_HOME=/root/.cache
 pip install uv
 uv venv /root/venv --python 3.12 && . /root/venv/bin/activate
 uv pip install "vllm==0.30.0"     # pinned; Qwen3.8-27B needs >= 0.17.0, Flash-Next >= 0.30.0
+# uv pip install "vllm==0.31.0"   # instead, for GLM-5.3-Flash (needs FlashInfer >= 0.6.18, see below)
 
 # vLLM 0.30.0 ships PyTorch built for CUDA 13.0, but the template's nvcc is 12.8,
 # which can't build FlashInfer's FP8 KV-cache kernels for the RTX PRO 6000 (sm_120).
@@ -433,6 +435,10 @@ apt-get update && apt-get install -y cuda-toolkit-13-0
 Flash-Next runs on stable vLLM 0.30.0 and later, but its [recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next)
 is tuned and tested on nightly builds; if the pinned version fails to load it, the recipe's Install section
 generates the nightly install command.
+
+GLM-5.3-Flash needs vLLM 0.31.0 (the version a published 4x RTX PRO 6000 run used) and FlashInfer 0.6.18 or
+newer, for its sparse attention. Check with `python -c "import flashinfer; print(flashinfer.__version__)"`
+after the install, and `uv pip install -U flashinfer-python` if it is older.
 
 ### Download weights (on every pod start, to the container disk)
 
@@ -445,6 +451,7 @@ hf auth login                              # paste the token; answer "n" to the 
 export HF_XET_HIGH_PERFORMANCE=1
 hf download Qwen/Qwen3.8-27B-FP8 --local-dir /root/models/qwen3.8-27b-fp8
 hf download Qwen/Qwen3.8-Flash-Next-FP8 --local-dir /root/models/qwen3.8-flash-next-fp8   # instead, for Flash-Next
+hf download zai-org/GLM-5.3-Flash --local-dir /root/models/glm-5.3-flash-fp8               # instead, for GLM-5.3-Flash
 ```
 
 Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took about 3 min, peaking around
@@ -455,8 +462,10 @@ Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took a
 | Qwen3.8-27B FP8 | `Qwen/Qwen3.8-27B-FP8` | 31 GB | 1x RTX PRO 6000, below |
 | Qwen3.8-27B NVFP4 | `nvidia/Qwen3.8-27B-NVFP4` | 22 GB | 1x RTX PRO 6000 (untested) |
 | Qwen3.8-Flash-Next FP8 | `Qwen/Qwen3.8-Flash-Next-FP8` | 186 GB | 2 or 4x RTX PRO 6000, below (untested) |
+| GLM-5.3-Flash FP8 | `zai-org/GLM-5.3-Flash` | 328 GB | 4x RTX PRO 6000, below (untested) |
+| GLM-5.3-Flash NVFP4 | `RedHatAI/GLM-5.3-Flash-NVFP4` | ~200 GB | 4x RTX PRO 6000, fallback if FP8 doesn't fit |
 
-### Serve: common to both models
+### Serve: common to every model
 
 `--served-model-name` must match `LOCAL_MODEL` in `.env`, and `VLLM_KEY` must match
 `LOCAL_API_KEY` (generate with `openssl rand -hex 32`). Set the key in the SSH
@@ -548,7 +557,75 @@ Expect (estimates, nobody has run this here yet):
 - Maximum concurrency at 131,072 tokens should be 4x or more.
 - Several minutes from start to ready.
 
+### Serve: GLM-5.3-Flash on 4 GPUs (untested on RTX PRO 6000)
+
+Set `LOCAL_MODEL=glm-5.3-flash` in `.env` first, and install vLLM 0.31.0 (see Install vLLM).
+
+```bash
+export VLLM_ENGINE_READY_TIMEOUT_S=3600
+vllm serve /root/models/glm-5.3-flash-fp8 \
+  --served-model-name glm-5.3-flash \
+  --host 127.0.0.1 --port 8000 \
+  --tensor-parallel-size 4 \
+  --max-model-len 131072 \
+  --max-num-seqs 16 \
+  --gpu-memory-utilization 0.95 \
+  --kv-cache-dtype fp8 \
+  --no-enable-flashinfer-autotune \
+  --reasoning-parser glm47 \
+  --enable-auto-tool-choice --tool-call-parser glm47 \
+  --api-key "$VLLM_KEY" \
+  2>&1 | tee /root/vllm.log
+```
+
+FP8 fits on 4 GPUs, with less room to spare than the Qwen models. The memory budget, across all four:
+
+| | GB |
+| --- | --- |
+| 4 x 97,887 MiB | 410 |
+| What vLLM may use at `--gpu-memory-utilization 0.95` | 390 |
+| Weights | -328 |
+| Activations, CUDA graphs, NCCL buffers (about 4 to 5 GB per GPU) | -18 |
+| **Left for the KV cache** | **about 44** |
+
+The model keeps a compressed KV cache in 11 of its 45 layers: about 7 KB per token in theory, but vLLM runs
+have used 30 to 44 KB per token across the GPUs, so plan with 40 KB (46 KB with a BF16 cache). 44 GB holds
+about a million tokens; four agents at 131,072 tokens need 524,288.
+
+Why these settings:
+
+- **`--max-model-len 131072`** is the same context as the Qwen runs, so the runs compare.
+- **`--max-num-seqs 16`** caps the batch, which shrinks the CUDA graphs and activation memory that come out
+  of the KV cache's share. Raise it if a load test runs more than 16 agents at once.
+- **`--no-enable-flashinfer-autotune`**: FlashInfer's tuning step hung for 11 minutes on a 4x RTX PRO 6000 run.
+- **`--reasoning-parser glm47`, `--tool-call-parser glm47`** are the vLLM recipe's. RedHatAI's NVFP4 model
+  card uses `--reasoning-parser glm45`; try it if thinking text shows up in the answers.
+- **`VLLM_ENGINE_READY_TIMEOUT_S=3600`**: loading 328 GB and compiling takes longer than vLLM's default wait.
+- **MTP speculative decoding** is left off: its draft weights and cache come out of the same tight budget.
+  Once the plain setup works and the KV cache has room, try
+  `--speculative-config '{"method":"mtp","num_speculative_tokens":3}'` with `BENCH_VARIANT=mtp3`.
+
+Check in the log, before the smoke test:
+
+- `Available KV cache memory`: expect about 10 GiB per GPU.
+- `Maximum concurrency for 131,072 tokens per request`: expect about 7x; want 4x or more.
+
+If it doesn't fit, see Troubleshooting.
+
 ### Troubleshooting
+
+- **GLM-5.3-Flash: out of memory at startup (loading or CUDA graph capture):** lower
+  `--gpu-memory-utilization` to 0.93.
+- **GLM-5.3-Flash: maximum concurrency below 4x:** lower `--max-model-len` to 100000 (shorter than the Qwen
+  runs; give them `BENCH_VARIANT=ctx100k`), or serve the NVFP4 weights (`RedHatAI/GLM-5.3-Flash-NVFP4`, or
+  `local-inference-lab/GLM-5.3-Flash-NVFP4` which a 4x RTX PRO 6000 run used) with `BENCH_VARIANT=nvfp4`.
+- **GLM-5.3-Flash: startup error about the KV cache dtype or sparse MLA:** the recipe doesn't cover sm_120.
+  Drop `--kv-cache-dtype fp8` first (the cache then takes about 15% more), then try `--enforce-eager`. A
+  sparse MLA initialization error can also mean FlashInfer is older than 0.6.18.
+- **Several GPUs: slow prompt processing, `NS` in `nvidia-smi topo -p2p r`:** the GPUs can't copy to each
+  other directly, often because the host's IOMMU blocks it (fixed with the `iommu=pt` kernel parameter,
+  which a rented pod can't change). It still works through host memory; a 4x RTX PRO 6000 GLM-5.3-Flash run
+  read prompts 51 to 59% faster once direct copies worked. Redeploy if you want to compare speeds.
 
 - **Flash-Next: `no kernel image is available for execution on the device`, or another startup error in a GPU
   kernel:** the risk of a card nobody validated it on (sm_120). Try in this order: `--moe-backend triton`,
@@ -571,4 +648,7 @@ Expect (estimates, nobody has run this here yet):
 Sources: Qwen3.8-27B [model card](https://huggingface.co/Qwen/Qwen3.8-27B) and
 [vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-27B); Qwen3.8-Flash-Next
 [model card](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8) and
-[vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) (as of 2026-10-13).
+[vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) (as of 2026-10-13); GLM-5.3-Flash
+[vLLM recipe](https://recipes.vllm.ai/zai-org/GLM-5.3-Flash),
+[4x RTX PRO 6000 benchmark](https://github.com/commdata2338/glm-5.3-flash-4x-rtx-pro-6000-benchmark) and
+[NVFP4 model card](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) (as of 2026-10-14).
