@@ -417,6 +417,64 @@ GPU1    PIX      X      0-47            0
 `topo -p2p r` should show `OK` between every pair. `NS` (not supported) still works, but the GPUs then copy
 through host memory, which is slower; see Troubleshooting if startup hangs.
 
+`OK` only means the driver says the GPUs support direct copies, not that the data arrives. On 2026-10-14 a
+2-GPU pod and a 4-GPU pod both showed `OK` everywhere, yet direct copies came back with the wrong contents
+(on the 4-GPU pod, every copy from a lower to a higher numbered GPU), and vLLM hung at startup. Neither host
+had `iommu=pt` in its kernel settings, so the IOMMU most likely blocks the copies; a rented pod can't change
+that. So check before installing anything (the PyTorch template has torch already):
+
+```bash
+cat /proc/cmdline       # the host's kernel settings: iommu=pt is a good sign, nothing about iommu a warning
+```
+
+Then copy something between every pair of GPUs and compare:
+
+```bash
+python - <<'EOF'
+import itertools, torch
+x = torch.randn(64 * 1024 * 1024)                          # 256 MB
+for a, b in itertools.permutations(range(torch.cuda.device_count()), 2):
+    copied = x.to(f'cuda:{a}').to(f'cuda:{b}').cpu()
+    print(f'GPU{a} -> GPU{b}:', 'OK' if torch.equal(copied, x) else 'WRONG DATA')
+EOF
+```
+
+Expect `OK` for every pair. Any `WRONG DATA` (or a hang) means the host can't do direct copies, and what to do
+depends on what the pod is for:
+
+- **Load tests, or anything else that measures speed:** terminate the pod and deploy another (stopping and
+  starting it may land on the same host). Without direct copies the GPUs exchange data through host memory,
+  which is slower (a 4x RTX PRO 6000 GLM-5.3-Flash run read prompts 51 to 59% faster with them), and a server
+  we own would have them, so speed measured without them understates what we'd get. If several redeploys
+  fail, ask RunPod support for a host with working peer-to-peer copies.
+- **Quality runs only (`bench/suite.py`):** the pod can stay, if NCCL works without direct copies. Check:
+
+  ```bash
+  cat > /root/nccl_test.py <<'PY'
+  import torch, torch.distributed as dist, torch.multiprocessing as mp
+
+  def run(rank, n):
+      dist.init_process_group('nccl', init_method='tcp://127.0.0.1:29511', rank=rank, world_size=n)
+      torch.cuda.set_device(rank)
+      x = torch.full((64 * 1024 * 1024,), float(rank + 1), device='cuda')
+      dist.all_reduce(x)
+      torch.cuda.synchronize()
+      print(f'rank {rank}:', 'OK' if bool((x == n * (n + 1) / 2).all()) else 'WRONG DATA', flush=True)
+      dist.destroy_process_group()
+
+  if __name__ == '__main__':
+      n = torch.cuda.device_count()
+      mp.spawn(run, args=(n,), nprocs=n)
+  PY
+  NCCL_P2P_DISABLE=1 timeout 120 python /root/nccl_test.py; echo "exit: $?"
+  ```
+
+  Every rank `OK` and `exit: 0`: start the server with `export NCCL_P2P_DISABLE=1` and
+  `--disable-custom-all-reduce` (vLLM's own all-reduce copies directly and ignores the variable). vLLM sends
+  data between the GPUs only through these two, so the answers are the same as on a host with direct copies;
+  only the speed differs. Leave `BENCH_VARIANT` unset so the runs join the model's report row, and don't run
+  load tests on this pod. (On the 4-GPU pod above, this test passed with `NCCL_P2P_DISABLE=1` and hung without.)
+
 ### Install vLLM (on every pod start, a few minutes)
 
 ```bash
@@ -626,15 +684,21 @@ If it doesn't fit, see Troubleshooting.
   other directly, often because the host's IOMMU blocks it (fixed with the `iommu=pt` kernel parameter,
   which a rented pod can't change). It still works through host memory; a 4x RTX PRO 6000 GLM-5.3-Flash run
   read prompts 51 to 59% faster once direct copies worked. Redeploy if you want to compare speeds.
-
 - **Flash-Next: `no kernel image is available for execution on the device`, or another startup error in a GPU
   kernel:** the risk of a card nobody validated it on (sm_120). Try in this order: `--moe-backend triton`,
   then `--enforce-eager` (no CUDA graphs: slower, but avoids graph capture), then a nightly vLLM build.
 - **Flash-Next: out of memory while loading:** check the offload is on (add `--engram-config
   '{"cpu_offload":true}'`), lower `--max-model-len`, or use 4 GPUs.
 - **Flash-Next: cache capacity error at startup:** keep `--max-num-seqs 256`.
-- **Several GPUs: startup hangs while the workers connect:** often missing direct GPU copies (`NS` in
-  `nvidia-smi topo -p2p r`). Start again with `NCCL_P2P_DISABLE=1` in the environment.
+- **Several GPUs: startup hangs, every GPU at 100% use but low power (about 100 of 600 W):** the GPUs are
+  waiting for each other, not computing. The hang can come right after `vLLM is using nccl` (NCCL connecting)
+  or later, at the first forward passes (vLLM's own all-reduce, `CUSTOM` in the `all-reduce backends` log
+  line, which writes straight into the other GPU's memory and ignores `NCCL_P2P_DISABLE`). Run the copy test
+  in Check the pod: `WRONG DATA` means redeploy, or for quality runs only, the NCCL test and the workaround
+  there. If every pair is `OK` but `topo -p2p r` says `NS`, start again with `NCCL_P2P_DISABLE=1` and
+  `--disable-custom-all-reduce`.
+- **GPU memory still in use after stopping vLLM:** Ctrl+C can leave the workers running. List them with
+  `nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv` and `kill -9` each PID.
 - **SSH drops immediately with "container ... is not running":** the container is
   crash-looping (usually the start command). Stop the pod and check its logs.
 - **`RuntimeError: No supported CUDA architectures found for major versions [9, 10, 12]`:**
