@@ -49,7 +49,9 @@ for level in "${levels[@]}"; do
     running=0; status=""
     for i in $(seq 1 "$level"); do
       p=${pids[$((i - 1))]}
-      run_dir=$(ls -d "$RESULTS/$task/"*"-L${level}w$i" 2>/dev/null | tail -1 || true)
+      # This group's run in slot i (older groups' runs end in the same -L<level>w<slot>)
+      run_dir=$(grep -lx "load_group=$group" "$RESULTS/$task/"*"-L${level}w$i/meta.txt" 2>/dev/null | tail -1 || true)
+      run_dir=${run_dir%/meta.txt}
       if kill -0 "$p" 2>/dev/null; then
         running=$((running + 1))
         last=$(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$run_dir/console.log" 2>/dev/null | tr -d '\r' | grep -v '^\s*$' | tail -1 | cut -c1-60 || true)
