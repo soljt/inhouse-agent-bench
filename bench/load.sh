@@ -9,6 +9,9 @@ set -euo pipefail
 BENCH="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 [ $# -ge 4 ] || { sed -n '2,7p' "$0"; exit 2; }
 harness="$1"; target="$2"; task="$3"; shift 3; levels=("$@")
+# One ChatGPT login cannot serve concurrent runs (single use refresh tokens), and its usage limits are all a
+# load test would measure
+[ "$target" = chatgpt ] && { echo "load tests do not run on the chatgpt target" >&2; exit 2; }
 # The task set (BENCH_TASKSET, from the environment or .env): workspace and tasks (see lib/taskset.py)
 eval "$(python3 "$BENCH/lib/taskset.py" env)"
 TASK="$TASKSET/tasks/$task"; [ -d "$TASK" ] || { echo "no task $task in $TASKSET" >&2; exit 2; }

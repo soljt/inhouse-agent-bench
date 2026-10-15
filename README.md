@@ -16,6 +16,7 @@ with an OpenAI target that exercises the same code path and gives a hosted model
 | --- | --- | --- |
 | `local` (default) | vLLM (or any OpenAI-compatible server) via SSH tunnel, `LOCAL_BASE_URL` | The real thing |
 | `openai` (`dryrun` is its old name and still works) | `https://api.openai.com/v1`, model `OPENAI_MODEL` (or `DRYRUN_MODEL`) | A hosted model to compare against; testing config and tooling without a server |
+| `chatgpt` (Codex only) | ChatGPT's Codex backend with a ChatGPT subscription login, model `CHATGPT_MODEL` | The same comparison, paid by a subscription instead of API credit |
 
 OpenCode talks Chat Completions to the local server; Codex talks the Responses API (it no longer
 supports Chat Completions for custom providers). vLLM serves both, so the smoke
@@ -30,6 +31,31 @@ Both harnesses run OpenAI models at reasoning effort high and, like the local mo
 context window (`codex/openai-api.config.toml`, the `openai-api` provider in `opencode/opencode.json`), so
 scores compare on equal terms. The provider is called `openai-api` because both harnesses have a built-in
 `openai` provider. Your code and the task set go to OpenAI on these runs.
+
+### The chatgpt target: Codex on a ChatGPT subscription
+
+Codex can sign in with a ChatGPT account instead of an API key; the `chatgpt` target runs the benchmark that
+way, with the same reasoning effort and context window as `openai` (`codex/chatgpt.config.toml`). OpenCode is
+not supported on it.
+
+1. **Log in once**, with the account meant for the benchmark: `bin/cx chatgpt login --device-auth`. It prints a
+   URL and a code to enter in a browser where that account is signed in. If ChatGPT refuses the device code,
+   turn on device code login for Codex in the account's (or workspace's) security settings, or run
+   `bin/cx chatgpt login` on a machine with a browser. The login is kept in `.codex-chatgpt/auth.json`
+   (`CHATGPT_HOME`, gitignored), apart from your personal `~/.codex`. `bin/cx chatgpt login status` checks it.
+2. **Set `CHATGPT_MODEL`** in `.env`, then `bench/run.sh cx chatgpt <task>`, or
+   `bench/suite.py --target chatgpt --harness cx`.
+
+Each run borrows the login (`bench/chatgpt_auth.py`): it is copied into the run's Codex home, copied back if
+Codex refreshed it (refresh tokens work only once), and deleted from the run folder however the run ends. So
+runs of this target must not overlap, and `load.sh` refuses it. The agent can read the login while it runs;
+its container reaches only `chatgpt.com` and `auth.openai.com`, through its own proxy port (3129). The API key
+is not passed in.
+
+Before pointing it at private code: a personal plan (Plus, Pro) may use conversations for training unless
+that is turned off in the account's data controls; business plans don't. Runs count against the plan's usage
+limits, so a long suite stops when they run out (a run cut off that way is graded as it stands); the report has
+token counts but no cost for these runs.
 
 
 ## Repository layout
@@ -91,7 +117,7 @@ firewall or container level.
 
 ### What a run does
 
-`bench/run.sh <oc|cx> <local|openai> <task-id>`:
+`bench/run.sh <oc|cx> <local|openai|chatgpt> <task-id>`:
 
 1. **Checks isolation.** The agent network must have no internet and no way to the host's own services; the
    model endpoint must answer through the gateway. The workspace's `.git` must match its baseline (gitguard).
@@ -345,8 +371,9 @@ The agent can change anything in its workspace, so nothing from the workspace ru
 
 - **Agent container:** runs as your uid with `--cap-drop ALL` and `no-new-privileges`, on the `bench-agents`
   network: `--internal` (no route out) and without a host address on it. Its only neighbour is
-  `bench-gateway`, called `host.docker.internal` there, which relays exactly three ports to the host: the model
-  forwarder, the allowlist HTTPS proxy (only `api.openai.com:443`, for the `openai` target) and a Maven registry for tasks
+  `bench-gateway`, called `host.docker.internal` there, which relays exactly four ports to the host: the model
+  forwarder, two allowlist HTTPS proxies (`api.openai.com:443` for the `openai` target; `chatgpt.com:443` and
+  `auth.openai.com:443` for `chatgpt`) and a Maven registry for tasks
   that set `NEEDS_REGISTRY=1`. `run.sh` verifies before each run that github.com and the host's ssh port are
   unreachable.
 - **Deps** (the task set's deps folder) are mounted read-only into every container.

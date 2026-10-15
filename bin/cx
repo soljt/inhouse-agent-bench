@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-# Codex launcher.  Usage: bin/cx [local|openai] [codex args...]   (dryrun = openai)
+# Codex launcher.  Usage: bin/cx [local|openai|chatgpt] [codex args...]   (dryrun = openai)
+#   bin/cx chatgpt login --device-auth   logs in the ChatGPT account the chatgpt target uses
 set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$REPO/scripts/env.sh" "$REPO/.env"
 
 target="local"
-case "${1:-}" in local|openai|dryrun) target="$1"; shift ;; esac
+case "${1:-}" in local|openai|dryrun|chatgpt) target="$1"; shift ;; esac
 
-# Isolated Codex home: no personal ChatGPT auth, history or memories leak in.
+# Isolated Codex home: no personal ChatGPT auth, history or memories leak in. The chatgpt target has its own,
+# holding only the ChatGPT login meant for the benchmark.
 export CODEX_HOME="$REPO/.codex-home"
+[ "$target" = chatgpt ] && CODEX_HOME="$CHATGPT_HOME"
 mkdir -p "$CODEX_HOME"
 cp "$REPO"/codex/*.toml "$CODEX_HOME/"
 
 overrides=(-c "model_providers.local.base_url=\"$LOCAL_BASE_URL\"")
-if is_openai_target "$target"; then
+if [ "$target" = chatgpt ] && [ "${1:-}" = login ]; then
+  exec codex "$@"
+elif [ "$target" = chatgpt ]; then
+  overrides+=(-p chatgpt -c "model=\"$CHATGPT_MODEL\"")
+elif is_openai_target "$target"; then
   overrides+=(-p openai-api -c "model=\"$OPENAI_MODEL\"")
 else
   overrides+=(-p local -c "model=\"$LOCAL_MODEL\"")

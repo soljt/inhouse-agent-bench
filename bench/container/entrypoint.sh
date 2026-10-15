@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs inside the container. Starts the harness in the agent's working directory with the
 # task prompt. Approval settings are the harness's own (opencode/opencode.json, codex/config.toml).
-# Env: HARNESS=oc|cx, MODEL_REF (provider/model for oc), PROFILE and MODEL (for cx), PROMPT_FILE,
+# Env: HARNESS=oc|cx, MODEL_REF (provider/model for oc), PROFILE, PROVIDER and MODEL (for cx), PROMPT_FILE,
 # AGENT_WORKDIR (where the agent starts, relative to the workspace at /work; from the task set)
 # Scripted mode (TURNS_IN set): no TUI. The prompt is turn 1, then each TURNS_IN/NN.md is sent as a follow-up
 # in the same session, with all permissions auto-approved (the container is the sandbox). After every turn the
@@ -30,7 +30,7 @@ if [ -n "${TURNS_IN:-}" ]; then
       cx)
         export CODEX_HOME="$HOME/.codex"; mkdir -p "$CODEX_HOME"; cp -n /harness/codex/*.toml "$CODEX_HOME/"
         common=(--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -c "model=\"$MODEL\""
-                -c "model_provider=\"$PROFILE\"" -c "model_providers.local.base_url=\"$LOCAL_BASE_URL\""
+                -c "model_provider=\"${PROVIDER:-$PROFILE}\"" -c "model_providers.local.base_url=\"$LOCAL_BASE_URL\""
                 -o "$TURNS_OUT/$t.last.md")
         if [ $n -eq 1 ]; then codex exec -p "$PROFILE" "${common[@]}" "$msg"
         else codex exec resume --last "${common[@]}" "$msg"; fi | tee "$TURNS_OUT/$t.out" || echo "turn $t exited non-zero" >> "$TURNS_OUT/errors.txt"

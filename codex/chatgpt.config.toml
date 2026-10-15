@@ -1,0 +1,7 @@
+# Codex's built-in OpenAI provider with a ChatGPT login (bench/chatgpt_auth.py lends it to each run)
+model_provider = "openai"
+forced_login_method = "chatgpt"
+model = "gpt-5.6-terra"  # overridden by CHATGPT_MODEL in bin/cx and bench/run.sh
+model_reasoning_effort = "high"
+# The same window as the local model, so runs compare on equal terms
+model_context_window = 131072

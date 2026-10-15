@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run every task of the task set with each harness, unattended, one run after the other.
 
-Usage: bench/suite.py [--dry-run] [--runs N] [--harness oc,cx] [--target local] [--timeout-min 45] [task ...]
+Usage: bench/suite.py [--dry-run] [--runs N] [--harness oc,cx] [--target local|openai|chatgpt] [--timeout-min 45] [task ...]
 
 Runs bench/run.sh with BENCH_SCRIPTED=1 for each task (all of the task set's, or the ones named) and harness.
 A task and harness that already have --runs graded runs for the same target, model, task set, BENCH_VARIANT
@@ -55,6 +55,8 @@ def read_env_file(path):
 def model_for(target):
     """The model run.sh will record: the env file wins over the environment, as in scripts/env.sh."""
     env = {**os.environ, **read_env_file(os.environ.get('BENCH_ENV', os.path.join(REPO, '.env')))}
+    if target == 'chatgpt':
+        return env.get('CHATGPT_MODEL', '')
     if target in OPENAI_NAMES:
         return env.get('OPENAI_MODEL') or env.get('DRYRUN_MODEL', '')
     return env.get('LOCAL_MODEL') or env.get('LOCAL_MODEL', '')
@@ -159,7 +161,7 @@ def main(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument('tasks', nargs='*')
     p.add_argument('--harness', default='oc,cx')
-    p.add_argument('--target', default='local', choices=['local', 'openai', 'dryrun'])
+    p.add_argument('--target', default='local', choices=['local', 'openai', 'dryrun', 'chatgpt'])
     p.add_argument('--timeout-min', type=float, default=45)
     p.add_argument('--runs', type=int, default=1)
     p.add_argument('--dry-run', action='store_true')
@@ -172,9 +174,11 @@ def main(argv):
         sys.exit(f'not in {ts_root}: {", ".join(unknown)}')
     tasks = a.tasks or all_tasks
     harnesses = a.harness.split(',')
+    if a.target == 'chatgpt' and harnesses != ['cx']:
+        sys.exit('target chatgpt runs Codex only: pass --harness cx')
     model = model_for(a.target)
     if not model:
-        sys.exit(f'no model set for target {a.target} (LOCAL_MODEL/LOCAL_MODEL or OPENAI_MODEL in .env)')
+        sys.exit(f'no model set for target {a.target} (LOCAL_MODEL/LOCAL_MODEL, OPENAI_MODEL or CHATGPT_MODEL in .env)')
 
     todo, done = plan(tasks, harnesses, a.target, model, ts_root, a.runs)
     variant = os.environ.get('BENCH_VARIANT')

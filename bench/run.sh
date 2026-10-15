@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # One benchmark run: reset workspace, check network isolation, start the harness TUI in the
 # container with the task prompt, then grade and keep the transcript.
-# Usage: bench/run.sh <oc|cx> <local|openai> <task-id>   (dryrun = openai)
+# Usage: bench/run.sh <oc|cx> <local|openai|chatgpt> <task-id>   (dryrun = openai; chatgpt: cx only)
 #   e.g. bench/run.sh oc openai e1-word-count
 set -euo pipefail
 BENCH="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"; REPO="$(dirname "$BENCH")"
-BRIDGE_IP=172.17.0.1; PROXY_PORT=3128
+BRIDGE_IP=172.17.0.1; PROXY_PORT=3128; CHATGPT_PROXY_PORT=3129
 harness="$1"; target="$2"; task="$3"
 # BENCH_ENV: another env file (e.g. a second model server); BENCH_RESULTS: another results folder
 # BENCH_VARIANT: a label for anything else that differs between runs (vLLM settings, harness version);
 # report.py keeps each label in its own row. BENCH_YOLO=1 auto-approves the TUI and is keyed the same way.
 . "$REPO/scripts/env.sh" "${BENCH_ENV:-$REPO/.env}"
-case "$target" in local|openai|dryrun) ;; *) echo "target must be local or openai, not $target" >&2; exit 2 ;; esac
+case "$target" in local|openai|dryrun|chatgpt) ;; *) echo "target must be local, openai or chatgpt, not $target" >&2; exit 2 ;; esac
+[ "$target" = chatgpt ] && [ "$harness" != cx ] && { echo "target chatgpt runs Codex only (a ChatGPT login is for Codex)" >&2; exit 2; }
 # Runs record the target's current name
 is_openai_target "$target" && target=openai
 # The task set (BENCH_TASKSET): its image, workspace, deps and the agent's start folder (see lib/taskset.py)
@@ -25,7 +26,7 @@ RESULTS="${BENCH_RESULTS:-$BENCH/results}"
 # called host.docker.internal there, which relays just these ports to the host (see agentnet.py).
 # The deps are shared by every run, so read-only: an agent cannot change what later runs (or grading) execute.
 MODEL_PORT="${LOCAL_BASE_URL##*:}"; MODEL_PORT="${MODEL_PORT%%/*}"
-python3 "$BENCH/agentnet.py" ensure "$MODEL_PORT" "$PROXY_PORT" 8081
+python3 "$BENCH/agentnet.py" ensure "$MODEL_PORT" "$PROXY_PORT" "$CHATGPT_PROXY_PORT" 8081
 RUN_NET=(--network bench-agents); [ -n "$DEPS" ] && RUN_NET+=(-v "$DEPS:$DEPS:ro")
 
 # The container must have no direct internet and reach nothing on the host but the relayed ports. Abort rather than run unconfined.
@@ -36,8 +37,21 @@ if docker run --rm "${RUN_NET[@]}" --entrypoint bash "$IMAGE" -c \
   echo "Container reached the host's ssh port. The agent network is not isolated (see agentnet.py)." >&2; exit 3
 fi
 
-proxy_env=()
-if [ "$target" = openai ]; then
+proxy_env=(); provider=""; api_key_env=(-e OPENAI_API_KEY)
+if [ "$target" = chatgpt ]; then
+  # Codex with a ChatGPT login talks to chatgpt.com and refreshes the login at auth.openai.com. Its own proxy
+  # port keeps that allowlist apart from the openai target's. The API key stays out of these containers.
+  [ -n "$CHATGPT_MODEL" ] || { echo "CHATGPT_MODEL is not set (.env)" >&2; exit 2; }
+  model="$CHATGPT_MODEL"; profile=chatgpt; provider=openai; base_url="$LOCAL_BASE_URL"; api_key_env=()
+  if ! (exec 3<>/dev/tcp/$BRIDGE_IP/$CHATGPT_PROXY_PORT) 2>/dev/null; then
+    mkdir -p "$BENCH/results"
+    nohup python3 "$BENCH/egress-proxy.py" --listen "$BRIDGE_IP:$CHATGPT_PROXY_PORT" \
+      --allow chatgpt.com:443 --allow auth.openai.com:443 --log "$BENCH/results/egress.log" >/dev/null 2>&1 &
+    sleep 1
+  fi
+  proxy_env=(-e "HTTPS_PROXY=http://host.docker.internal:$CHATGPT_PROXY_PORT" -e "https_proxy=http://host.docker.internal:$CHATGPT_PROXY_PORT"
+             -e "NO_PROXY=host.docker.internal,localhost" -e "no_proxy=host.docker.internal,localhost")
+elif [ "$target" = openai ]; then
   model="$OPENAI_MODEL"; profile=openai-api; base_url="$LOCAL_BASE_URL"
   if ! (exec 3<>/dev/tcp/$BRIDGE_IP/$PROXY_PORT) 2>/dev/null; then
     mkdir -p "$BENCH/results"
@@ -79,6 +93,12 @@ python3 "$BENCH/reset.py" "$BASE_TAG" "$WS"
 run_mounts=()
 for kv in "${TASKSET_RUN_DIRS[@]}"; do mkdir -p "$RUN/${kv#*=}"; run_mounts+=(-v "$RUN/${kv#*=}:${kv%%=*}"); done
 for d in "${TASKSET_RUN_CREATE[@]}"; do mkdir -p "$RUN/$d"; done
+# The chatgpt target borrows the ChatGPT login for this run; it is taken back (and kept if Codex refreshed it)
+# however the run ends, so it never stays in the run folder
+if [ "$target" = chatgpt ]; then
+  python3 "$BENCH/chatgpt_auth.py" install "$CHATGPT_HOME" "$RUN/home/.codex" || exit 3
+  trap 'python3 "$BENCH/chatgpt_auth.py" collect "$CHATGPT_HOME" "$RUN/home/.codex"' EXIT
+fi
 printf '[user]\n\tname = Bench Agent\n\temail = agent@bench.example\n' > "$RUN/home/.gitconfig"
 registry_pid=""
 if [ "${NEEDS_REGISTRY:-0}" = 1 ]; then
@@ -109,13 +129,14 @@ docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]
   -v "$WS:/work" -v "$RUN/prompt.md:/run/prompt.md:ro" "${run_mounts[@]}" \
   -v "$REPO/opencode:/harness/opencode:ro" -v "$REPO/codex:/harness/codex:ro" \
   -e HARNESS="$harness" -e PROMPT_FILE=/run/prompt.md -e AGENT_WORKDIR="$TASKSET_AGENT_WORKDIR" \
-  -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e MODEL="$model" \
+  -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e PROVIDER="$provider" -e MODEL="$model" \
   -e LOCAL_BASE_URL="$base_url" -e LOCAL_API_KEY -e LOCAL_MODEL \
-  -e OPENAI_API_KEY -e OPENAI_MODEL -e BENCH_YOLO "${proxy_env[@]}" \
+  "${api_key_env[@]}" -e OPENAI_MODEL -e BENCH_YOLO "${proxy_env[@]}" \
   "$IMAGE"; }
 if [ ${#tty[@]} -eq 0 ]; then docker_run 2>&1 | tee "$RUN/console.log" || true; else docker_run || true; fi
 
 echo "end=$(date -Is)" >> "$RUN/meta.txt"
+[ "$target" = chatgpt ] && python3 "$BENCH/chatgpt_auth.py" collect "$CHATGPT_HOME" "$RUN/home/.codex"
 [ -n "$registry_pid" ] && kill "$registry_pid" 2>/dev/null
 guard() { python3 "$BENCH/gitguard.py" check "$WS" --run "$RUN" || echo "!! $1 changed the workspace's .git hooks or config; restored, evidence in $RUN/gitguard" >&2; }
 guard "the agent"
