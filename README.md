@@ -17,14 +17,14 @@ with an OpenAI target that exercises the same code path and gives a hosted model
 | `local` (default) | vLLM (or any OpenAI-compatible server) via SSH tunnel, `LOCAL_BASE_URL` | The real thing |
 | `openai` (`dryrun` is its old name and still works) | `https://api.openai.com/v1`, model `OPENAI_MODEL` (or `DRYRUN_MODEL`) | A hosted model to compare against; testing config and tooling without a server |
 
-OpenCode talks Chat Completions; Codex talks the Responses API (it no longer
+OpenCode talks Chat Completions to the local server; Codex talks the Responses API (it no longer
 supports Chat Completions for custom providers). vLLM serves both, so the smoke
-test checks both.
+test checks both. Against OpenAI both harnesses use Responses, and that is all the smoke test checks there.
 
 The OpenCode `openai-api` provider uses OpenAI's own adapter (`@ai-sdk/openai`) rather
 than the generic one used for vLLM: the generic adapter sends `max_tokens`, which
 OpenAI's reasoning models reject. So an OpenCode run against OpenAI tests the harness, not
-the vLLM adapter; the smoke test covers that.
+the vLLM adapter; the local smoke test covers that.
 
 Both harnesses run OpenAI models at reasoning effort high and, like the local model, with a 131,072 token
 context window (`codex/openai-api.config.toml`, the `openai-api` provider in `opencode/opencode.json`), so
@@ -62,7 +62,7 @@ $EDITOR .env              # OPENAI_API_KEY (platform key), LOCAL_API_KEY, BENCH_
 ## Use
 
 ```bash
-scripts/smoke-test.sh openai      # one tool call on each API; expect PASS twice
+scripts/smoke-test.sh openai      # one tool call on the Responses API; expect PASS
 bin/oc openai                     # OpenCode TUI against OpenAI
 bin/cx openai                     # Codex against OpenAI
 
