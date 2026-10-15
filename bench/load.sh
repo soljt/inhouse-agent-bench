@@ -3,7 +3,7 @@
 # model server, each in its own workspace worktree (~/llm-bench-load/wN), without a TUI. Levels run one after
 # the other. Results land in bench/results/<task>/ as usual, tagged load_group/load_level/load_slot, and
 # bench/report.py summarises them in its "Load tests" section.
-# Usage: bench/load.sh <oc|cx> <local|dryrun> <task-id> <level> [<level> ...]
+# Usage: bench/load.sh <oc|cx> <local|openai> <task-id> <level> [<level> ...]
 #   e.g. bench/load.sh oc local e1-word-count 1 2 4 8
 set -euo pipefail
 BENCH="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"

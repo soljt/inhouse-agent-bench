@@ -3,28 +3,33 @@
 Two things live here:
 
 1. **Launchers** (`bin/oc`, `bin/cx`) that run OpenCode and Codex CLI against our self-hosted model, or
-   against OpenAI for a dry run, with their settings locked down.
+   against OpenAI's API, with their settings locked down.
 2. **A benchmark** (`bench/`) that runs those harnesses on real coding tasks in an isolated
    container, grades the result automatically, and helps a human grade the rest. The tasks come from a
    **task set**, a separate folder you write for your own code base (see Task sets); an example ships in
    `examples/python-taskset/`.
 
 Shared config for running OpenCode and Codex CLI against our self-hosted model,
-with an OpenAI dry-run target that exercises the same code path.
+with an OpenAI target that exercises the same code path and gives a hosted model to compare against.
 
 | Target | Endpoint | Used for |
 | --- | --- | --- |
 | `local` (default) | vLLM (or any OpenAI-compatible server) via SSH tunnel, `LOCAL_BASE_URL` | The real thing |
-| `dryrun` | `https://api.openai.com/v1` | Testing config, permissions and tooling before the server exists |
+| `openai` (`dryrun` is its old name and still works) | `https://api.openai.com/v1`, model `OPENAI_MODEL` (or `DRYRUN_MODEL`) | A hosted model to compare against; testing config and tooling without a server |
 
 OpenCode talks Chat Completions; Codex talks the Responses API (it no longer
 supports Chat Completions for custom providers). vLLM serves both, so the smoke
 test checks both.
 
-The OpenCode `dryrun` provider uses OpenAI's own adapter (`@ai-sdk/openai`) rather
+The OpenCode `openai-api` provider uses OpenAI's own adapter (`@ai-sdk/openai`) rather
 than the generic one used for vLLM: the generic adapter sends `max_tokens`, which
-OpenAI's reasoning models reject. So an OpenCode dry run tests the harness, not
+OpenAI's reasoning models reject. So an OpenCode run against OpenAI tests the harness, not
 the vLLM adapter; the smoke test covers that.
+
+Both harnesses run OpenAI models at reasoning effort high and, like the local model, with a 131,072 token
+context window (`codex/openai-api.config.toml`, the `openai-api` provider in `opencode/opencode.json`), so
+scores compare on equal terms. The provider is called `openai-api` because both harnesses have a built-in
+`openai` provider. Your code and the task set go to OpenAI on these runs.
 
 
 ## Repository layout
@@ -57,9 +62,9 @@ $EDITOR .env              # OPENAI_API_KEY (platform key), LOCAL_API_KEY, BENCH_
 ## Use
 
 ```bash
-scripts/smoke-test.sh dryrun      # one tool call on each API; expect PASS twice
-bin/oc dryrun                     # OpenCode TUI against OpenAI
-bin/cx dryrun                     # Codex against OpenAI
+scripts/smoke-test.sh openai      # one tool call on each API; expect PASS twice
+bin/oc openai                     # OpenCode TUI against OpenAI
+bin/cx openai                     # Codex against OpenAI
 
 ssh -N -L 8000:localhost:8000 root@<pod-ip> -p <port> -i ~/.ssh/<key>   # in another terminal
 scripts/smoke-test.sh             # same checks against vLLM
@@ -68,7 +73,7 @@ bin/cx                            # Codex against our model
 ```
 
 Run them from inside the project you want the agent to work on, e.g.
-`cd ~/git/some-repo && ~/llm-harness/bin/oc dryrun`.
+`cd ~/git/some-repo && ~/llm-harness/bin/oc openai`.
 
 ## What the launchers lock down
 
@@ -86,7 +91,7 @@ firewall or container level.
 
 ### What a run does
 
-`bench/run.sh <oc|cx> <local|dryrun> <task-id>`:
+`bench/run.sh <oc|cx> <local|openai> <task-id>`:
 
 1. **Checks isolation.** The agent network must have no internet and no way to the host's own services; the
    model endpoint must answer through the gateway. The workspace's `.git` must match its baseline (gitguard).
@@ -341,7 +346,7 @@ The agent can change anything in its workspace, so nothing from the workspace ru
 - **Agent container:** runs as your uid with `--cap-drop ALL` and `no-new-privileges`, on the `bench-agents`
   network: `--internal` (no route out) and without a host address on it. Its only neighbour is
   `bench-gateway`, called `host.docker.internal` there, which relays exactly three ports to the host: the model
-  forwarder, the allowlist HTTPS proxy (only `api.openai.com:443`, for dry runs) and a Maven registry for tasks
+  forwarder, the allowlist HTTPS proxy (only `api.openai.com:443`, for the `openai` target) and a Maven registry for tasks
   that set `NEEDS_REGISTRY=1`. `run.sh` verifies before each run that github.com and the host's ssh port are
   unreachable.
 - **Deps** (the task set's deps folder) are mounted read-only into every container.

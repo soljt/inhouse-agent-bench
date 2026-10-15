@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Codex launcher.  Usage: bin/cx [local|dryrun] [codex args...]
+# Codex launcher.  Usage: bin/cx [local|openai] [codex args...]   (dryrun = openai)
 set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$REPO/scripts/env.sh" "$REPO/.env"
 
 target="local"
-case "${1:-}" in local|dryrun) target="$1"; shift ;; esac
+case "${1:-}" in local|openai|dryrun) target="$1"; shift ;; esac
 
 # Isolated Codex home: no personal ChatGPT auth, history or memories leak in.
 export CODEX_HOME="$REPO/.codex-home"
@@ -13,8 +13,8 @@ mkdir -p "$CODEX_HOME"
 cp "$REPO"/codex/*.toml "$CODEX_HOME/"
 
 overrides=(-c "model_providers.local.base_url=\"$LOCAL_BASE_URL\"")
-if [ "$target" = dryrun ]; then
-  overrides+=(-p dryrun -c "model=\"$DRYRUN_MODEL\"")
+if is_openai_target "$target"; then
+  overrides+=(-p openai-api -c "model=\"$OPENAI_MODEL\"")
 else
   overrides+=(-p local -c "model=\"$LOCAL_MODEL\"")
 fi

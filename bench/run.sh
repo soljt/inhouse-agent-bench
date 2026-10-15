@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One benchmark run: reset workspace, check network isolation, start the harness TUI in the
 # container with the task prompt, then grade and keep the transcript.
-# Usage: bench/run.sh <oc|cx> <local|dryrun> <task-id>
-#   e.g. bench/run.sh oc dryrun e1-word-count
+# Usage: bench/run.sh <oc|cx> <local|openai> <task-id>   (dryrun = openai)
+#   e.g. bench/run.sh oc openai e1-word-count
 set -euo pipefail
 BENCH="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"; REPO="$(dirname "$BENCH")"
 BRIDGE_IP=172.17.0.1; PROXY_PORT=3128
@@ -11,7 +11,9 @@ harness="$1"; target="$2"; task="$3"
 # BENCH_VARIANT: a label for anything else that differs between runs (vLLM settings, harness version);
 # report.py keeps each label in its own row. BENCH_YOLO=1 auto-approves the TUI and is keyed the same way.
 . "$REPO/scripts/env.sh" "${BENCH_ENV:-$REPO/.env}"
-case "$target" in local|dryrun) ;; *) echo "target must be local or dryrun, not $target" >&2; exit 2 ;; esac
+case "$target" in local|openai|dryrun) ;; *) echo "target must be local or openai, not $target" >&2; exit 2 ;; esac
+# Runs record the target's current name
+is_openai_target "$target" && target=openai
 # The task set (BENCH_TASKSET): its image, workspace, deps and the agent's start folder (see lib/taskset.py)
 eval "$(python3 "$BENCH/lib/taskset.py" env)"
 WS="$TASKSET_WORKSPACE"; DEPS="$TASKSET_DEPS"; IMAGE="$TASKSET_IMAGE"
@@ -35,8 +37,8 @@ if docker run --rm "${RUN_NET[@]}" --entrypoint bash "$IMAGE" -c \
 fi
 
 proxy_env=()
-if [ "$target" = dryrun ]; then
-  model="$DRYRUN_MODEL"; profile=dryrun; base_url="$LOCAL_BASE_URL"
+if [ "$target" = openai ]; then
+  model="$OPENAI_MODEL"; profile=openai-api; base_url="$LOCAL_BASE_URL"
   if ! (exec 3<>/dev/tcp/$BRIDGE_IP/$PROXY_PORT) 2>/dev/null; then
     mkdir -p "$BENCH/results"
     nohup python3 "$BENCH/egress-proxy.py" --listen "$BRIDGE_IP:$PROXY_PORT" --allow api.openai.com:443 \
@@ -109,7 +111,7 @@ docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]
   -e HARNESS="$harness" -e PROMPT_FILE=/run/prompt.md -e AGENT_WORKDIR="$TASKSET_AGENT_WORKDIR" \
   -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e MODEL="$model" \
   -e LOCAL_BASE_URL="$base_url" -e LOCAL_API_KEY -e LOCAL_MODEL \
-  -e OPENAI_API_KEY -e DRYRUN_MODEL -e BENCH_YOLO "${proxy_env[@]}" \
+  -e OPENAI_API_KEY -e OPENAI_MODEL -e BENCH_YOLO "${proxy_env[@]}" \
   "$IMAGE"; }
 if [ ${#tty[@]} -eq 0 ]; then docker_run 2>&1 | tee "$RUN/console.log" || true; else docker_run || true; fi
 

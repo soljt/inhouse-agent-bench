@@ -17,8 +17,8 @@ base_url = "http://localhost:8000/v1"  # overridden by LOCAL_BASE_URL in bin/cx
 env_key = "LOCAL_API_KEY"
 wire_api = "responses"
 
-[model_providers.dryrun]
-name = "OpenAI dry run"
+[model_providers.openai-api]
+name = "OpenAI API"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 wire_api = "responses"

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# OpenCode launcher.  Usage: bin/oc [local|dryrun] [opencode args...]
+# OpenCode launcher.  Usage: bin/oc [local|openai] [opencode args...]   (dryrun = openai)
 set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$REPO/scripts/env.sh" "$REPO/.env"
 
 target="local"
-case "${1:-}" in local|dryrun) target="$1"; shift ;; esac
-if [ "$target" = dryrun ]; then model="dryrun/$DRYRUN_MODEL"; else model="local/$LOCAL_MODEL"; fi
+case "${1:-}" in local|openai|dryrun) target="$1"; shift ;; esac
+if is_openai_target "$target"; then model="openai-api/$OPENAI_MODEL"; else model="local/$LOCAL_MODEL"; fi
 
 export OPENCODE_CONFIG="$REPO/opencode/opencode.json"
 export OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_SHARE=1 OPENCODE_DISABLE_MODELS_FETCH=1

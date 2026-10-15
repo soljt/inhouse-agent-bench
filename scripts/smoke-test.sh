@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Checks that an endpoint returns a well-formed tool call on both APIs the
 # harnesses use: Chat Completions (OpenCode) and Responses (Codex).
-# Usage: scripts/smoke-test.sh [local|dryrun]
+# Usage: scripts/smoke-test.sh [local|openai]   (dryrun = openai)
 set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$REPO/scripts/env.sh" "$REPO/.env"
 
-if [ "${1:-local}" = dryrun ]; then
-  base="https://api.openai.com/v1"; key="$OPENAI_API_KEY"; model="$DRYRUN_MODEL"
+if is_openai_target "${1:-local}"; then
+  base="https://api.openai.com/v1"; key="$OPENAI_API_KEY"; model="$OPENAI_MODEL"
 else
   base="$LOCAL_BASE_URL"; key="$LOCAL_API_KEY"; model="$LOCAL_MODEL"
 fi

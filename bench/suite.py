@@ -38,6 +38,7 @@ RUN_SH = os.path.join(BENCH, 'run.sh')
 RESULTS = os.environ.get('BENCH_RESULTS', os.path.join(BENCH, 'results'))
 STOP_FILE = os.path.expanduser('~/suite.stop')
 LOCAL_NAMES = ('local',)
+OPENAI_NAMES = ('openai', 'dryrun')
 
 
 def read_env_file(path):
@@ -54,14 +55,14 @@ def read_env_file(path):
 def model_for(target):
     """The model run.sh will record: the env file wins over the environment, as in scripts/env.sh."""
     env = {**os.environ, **read_env_file(os.environ.get('BENCH_ENV', os.path.join(REPO, '.env')))}
-    if target == 'dryrun':
-        return env.get('DRYRUN_MODEL', '')
+    if target in OPENAI_NAMES:
+        return env.get('OPENAI_MODEL') or env.get('DRYRUN_MODEL', '')
     return env.get('LOCAL_MODEL') or env.get('LOCAL_MODEL', '')
 
 
 def same_target(a, b):
-    """True for the same target; local and its old name local count as one."""
-    return a == b or (a in LOCAL_NAMES and b in LOCAL_NAMES)
+    """True for the same target; a target and its old name (local, dryrun) count as one."""
+    return a == b or (a in LOCAL_NAMES and b in LOCAL_NAMES) or (a in OPENAI_NAMES and b in OPENAI_NAMES)
 
 
 def done_runs(task, harness, target, model, ts_root):
@@ -158,7 +159,7 @@ def main(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument('tasks', nargs='*')
     p.add_argument('--harness', default='oc,cx')
-    p.add_argument('--target', default='local', choices=['local', 'dryrun'])
+    p.add_argument('--target', default='local', choices=['local', 'openai', 'dryrun'])
     p.add_argument('--timeout-min', type=float, default=45)
     p.add_argument('--runs', type=int, default=1)
     p.add_argument('--dry-run', action='store_true')
@@ -173,7 +174,7 @@ def main(argv):
     harnesses = a.harness.split(',')
     model = model_for(a.target)
     if not model:
-        sys.exit(f'no model set for target {a.target} (LOCAL_MODEL/LOCAL_MODEL or DRYRUN_MODEL in .env)')
+        sys.exit(f'no model set for target {a.target} (LOCAL_MODEL/LOCAL_MODEL or OPENAI_MODEL in .env)')
 
     todo, done = plan(tasks, harnesses, a.target, model, ts_root, a.runs)
     variant = os.environ.get('BENCH_VARIANT')

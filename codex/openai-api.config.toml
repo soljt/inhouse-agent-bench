@@ -1,0 +1,5 @@
+model_provider = "openai-api"
+model = "gpt-5.5"  # overridden by OPENAI_MODEL in bin/cx
+model_reasoning_effort = "high"
+# The same window as the local model, so runs compare on equal terms
+model_context_window = 131072
