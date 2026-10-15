@@ -41,16 +41,18 @@ not supported on it.
 1. **Log in once**, with the account meant for the benchmark: `bin/cx chatgpt login --device-auth`. It prints a
    URL and a code to enter in a browser where that account is signed in. If ChatGPT refuses the device code,
    turn on device code login for Codex in the account's (or workspace's) security settings, or run
-   `bin/cx chatgpt login` on a machine with a browser. The login is kept in `.codex-chatgpt/auth.json`
+   `bin/cx chatgpt login` on a machine with a browser. A Codex personal access token works too, and suits
+   unattended runs better since it is not refreshed: `printenv CODEX_ACCESS_TOKEN | bin/cx chatgpt login
+   --with-access-token`. The login is kept in `.codex-chatgpt/auth.json`
    (`CHATGPT_HOME`, gitignored), apart from your personal `~/.codex`. `bin/cx chatgpt login status` checks it.
 2. **Set `CHATGPT_MODEL`** in `.env`, then `bench/run.sh cx chatgpt <task>`, or
    `bench/suite.py --target chatgpt --harness cx`.
 
 Each run borrows the login (`bench/chatgpt_auth.py`): it is copied into the run's Codex home, copied back if
-Codex refreshed it (refresh tokens work only once), and deleted from the run folder however the run ends. So
+Codex refreshed a sign-in (refresh tokens work only once), and deleted from the run folder however the run ends. So
 runs of this target must not overlap, and `load.sh` refuses it. The agent can read the login while it runs;
 its container reaches only `chatgpt.com` and `auth.openai.com`, through its own proxy port (3129). The API key
-is not passed in.
+is not passed in. Codex also tries to fetch from `*.oaiusercontent.com`; that is denied and runs work without it.
 
 Before pointing it at private code: a personal plan (Plus, Pro) may use conversations for training unless
 that is turned off in the account's data controls; business plans don't. Runs count against the plan's usage

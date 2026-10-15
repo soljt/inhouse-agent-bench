@@ -4,8 +4,9 @@
 Usage: bench/chatgpt_auth.py install <login-home> <run-codex-home>
        bench/chatgpt_auth.py collect <login-home> <run-codex-home>
 
-The login is the auth.json that `codex login` wrote to <login-home> (CHATGPT_HOME, .codex-chatgpt/ by default).
-install copies it into the run's Codex home. collect copies it back when Codex refreshed it during the run
+The login is the auth.json that `codex login` wrote to <login-home> (CHATGPT_HOME, .codex-chatgpt/ by default):
+a ChatGPT sign-in (tokens with a refresh token) or a personal access token (`codex login --with-access-token`).
+install copies it into the run's Codex home. collect copies a sign-in back when Codex refreshed it during the run
 (OpenAI refresh tokens are single use, so the old one no longer works), then deletes it from the run folder,
 which run.sh keeps as the transcript. Runs of the chatgpt target must not overlap; load.sh refuses them.
 """
@@ -18,13 +19,13 @@ AUTH = 'auth.json'
 
 
 def read_login(path):
-    """The login in an auth.json as a dict, or None when the file is missing or not a ChatGPT login."""
+    """The login in an auth.json as a dict, or None when the file is missing or holds no ChatGPT login."""
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
     tokens = data.get('tokens') or {}
-    return data if tokens.get('refresh_token') else None
+    return data if tokens.get('refresh_token') or data.get('personal_access_token') else None
 
 
 def write_private(path, text):
@@ -40,7 +41,8 @@ def install(login_home, run_home):
     """Copy the login into the run's Codex home; exit with a hint when there is none."""
     src = login_home / AUTH
     if read_login(src) is None:
-        sys.exit(f'no ChatGPT login in {src}. Log in once with: bin/cx chatgpt login --device-auth')
+        sys.exit(f'no ChatGPT login in {src}. Log in once with: bin/cx chatgpt login --device-auth '
+                 '(or --with-access-token, reading a personal access token from stdin)')
     run_home.mkdir(parents=True, exist_ok=True)
     write_private(run_home / AUTH, src.read_text())
 
