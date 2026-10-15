@@ -3,7 +3,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 OPENCODE_VERSION=1.18.34
-CODEX_VERSION=0.147.0
+CODEX_VERSION=0.162.1
 
 node -e 'process.exit(+process.versions.node.split(".")[0] >= 20 ? 0 : 1)' \
   || { echo "Node 20+ required"; exit 1; }

@@ -12,7 +12,7 @@ RUN apt-get update \
  && usermod -l agent -d /home/agent node && groupmod -n agent node
 # Pinned to the same versions as scripts/setup.sh
 ARG OPENCODE_VERSION=1.18.34
-ARG CODEX_VERSION=0.147.0
+ARG CODEX_VERSION=0.162.1
 RUN npm i -g "opencode-ai@${OPENCODE_VERSION}" "@openai/codex@${CODEX_VERSION}" && npm cache clean --force
 ENV OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_SHARE=1 OPENCODE_DISABLE_MODELS_FETCH=1
 # run.sh mounts the framework's entrypoint.sh here at run time
