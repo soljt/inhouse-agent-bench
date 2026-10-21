@@ -1,15 +1,21 @@
-# llm-harness
+# inhouse-agent-bench
+
+Benchmark coding agents on tasks from your own code base. Public benchmarks measure models on public code
+they may have seen in training; this runs agent harnesses (OpenCode, Codex CLI) with a self-hosted or hosted
+model on real tasks cut from your repository, in an isolated container, grades the result automatically, and
+helps a human grade the rest blind. Use it to decide whether a self-hosted model is good enough for your
+team, or which harness and model to adopt.
 
 Two things live here:
 
-1. **Launchers** (`bin/oc`, `bin/cx`) that run OpenCode and Codex CLI against our self-hosted model, or
+1. **Launchers** (`bin/oc`, `bin/cx`) that run OpenCode and Codex CLI against your self-hosted model, or
    against OpenAI's API, with their settings locked down.
 2. **A benchmark** (`bench/`) that runs those harnesses on real coding tasks in an isolated
    container, grades the result automatically, and helps a human grade the rest. The tasks come from a
    **task set**, a separate folder you write for your own code base (see Task sets); an example ships in
    `examples/python-taskset/`.
 
-Shared config for running OpenCode and Codex CLI against our self-hosted model,
+Shared config for running OpenCode and Codex CLI against your self-hosted model,
 with an OpenAI target that exercises the same code path and gives a hosted model to compare against.
 
 | Target | Endpoint | Used for |
@@ -96,17 +102,17 @@ bin/cx openai                     # Codex against OpenAI
 
 ssh -N -L 8000:localhost:8000 root@<pod-ip> -p <port> -i ~/.ssh/<key>   # in another terminal
 scripts/smoke-test.sh             # same checks against vLLM
-bin/oc                            # OpenCode against our model
-bin/cx                            # Codex against our model
+bin/oc                            # OpenCode against your model
+bin/cx                            # Codex against your model
 ```
 
 Run them from inside the project you want the agent to work on, e.g.
-`cd ~/git/some-repo && ~/llm-harness/bin/oc openai`.
+`cd ~/git/some-repo && ~/inhouse-agent-bench/bin/oc openai`.
 
 ## What the launchers lock down
 
-- **OpenCode:** only our two providers are enabled; sharing, auto-update and the
-  models.dev catalogue fetch are off; the title-generation model is our own model.
+- **OpenCode:** only the two configured providers are enabled; sharing, auto-update and the
+  models.dev catalogue fetch are off; the title-generation model is the local model.
   Edits, shell commands and web fetches prompt, except read-only git/ls; web search is denied.
 - **Codex:** runs with its own `CODEX_HOME` (`.codex-home/`, gitignored), so your
   personal ChatGPT login, history and memories are never used. Analytics, update
@@ -485,7 +491,7 @@ depends on what the pod is for:
 - **Load tests, or anything else that measures speed:** terminate the pod and deploy another (stopping and
   starting it may land on the same host). Without direct copies the GPUs exchange data through host memory,
   which is slower (a 4x RTX PRO 6000 GLM-5.3-Flash run read prompts 51 to 59% faster with them), and a server
-  we own would have them, so speed measured without them understates what we'd get. If several redeploys
+  you own would have them, so speed measured without them understates what you'd get. If several redeploys
   fail, ask RunPod support for a host with working peer-to-peer copies.
 - **Quality runs only (`bench/suite.py`):** the pod can stay, if NCCL works without direct copies. Check:
 
