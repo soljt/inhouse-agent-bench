@@ -89,6 +89,9 @@ mkdir -p "$RUN/home"; cp "$TASK/prompt.md" "$RUN/prompt.md"
 python3 "$BENCH/gitguard.py" check "$WS" --before || exit 3
 python3 "$BENCH/reset.py" "$BASE_TAG" "$WS"
 [ -x "$TASK/prepare.sh" ] && "$TASK/prepare.sh" "$WS"
+# The agent gets a git folder with the base tag's history only, mounted over /work/.git (see agentgit.py)
+mapfile -t git_mounts < <(python3 "$BENCH/agentgit.py" "$WS" "$BASE_TAG" "$RUN")
+[ ${#git_mounts[@]} -gt 0 ] || { echo "agentgit.py made no git folder for $RUN" >&2; exit 3; }
 # Run folders the task set mounts into the agent container (taskset.toml [agent] run_dirs, create)
 run_mounts=()
 for kv in "${TASKSET_RUN_DIRS[@]}"; do mkdir -p "$RUN/${kv#*=}"; run_mounts+=(-v "$RUN/${kv#*=}:${kv%%=*}"); done
@@ -126,7 +129,7 @@ docker_run() { docker run --rm "${tty[@]}" --name "bench-$task-$$" "${RUN_NET[@]
   --cap-drop ALL --security-opt no-new-privileges \
   -v "$BENCH/container/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro" \
   --user "$(id -u):$(id -g)" -e HOME="$AGENT_HOME" -v "$RUN/home:$AGENT_HOME" \
-  -v "$WS:/work" -v "$RUN/prompt.md:/run/prompt.md:ro" "${run_mounts[@]}" \
+  -v "$WS:/work" "${git_mounts[@]}" -v "$RUN/prompt.md:/run/prompt.md:ro" "${run_mounts[@]}" \
   -v "$REPO/opencode:/harness/opencode:ro" -v "$REPO/codex:/harness/codex:ro" \
   -e HARNESS="$harness" -e PROMPT_FILE=/run/prompt.md -e AGENT_WORKDIR="$TASKSET_AGENT_WORKDIR" \
   -e MODEL_REF="$profile/$model" -e PROFILE="$profile" -e PROVIDER="$provider" -e MODEL="$model" \

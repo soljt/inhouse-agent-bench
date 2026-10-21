@@ -5,7 +5,8 @@ Usage:
   bench/gitguard.py check <workspace> [--run <run-dir>] [--before]
   bench/gitguard.py accept <workspace>
 
-The agent, and the grader running the agent's build files, can write to the workspace's .git. A hook, or
+The grader running the agent's build files can write to the workspace's .git (the agent itself works on a
+git folder of its own, see agentgit.py, but the files it leaves run at grading). A hook, or
 a config entry such as core.fsmonitor, a filter driver or a diff command, would then run on the host the
 next time git runs there (reset.py, load.sh). Host git calls already pass -c core.hooksPath=/dev/null and
 -c core.fsmonitor=false; this guard covers everything else.

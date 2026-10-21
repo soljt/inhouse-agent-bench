@@ -76,7 +76,7 @@ token counts but no cost for these runs.
 | `bench/lib/taskset.py` | Finds and reads the task set: the contract between the framework and a task set |
 | `bench/vllm_stats.py` | Throughput and KV cache stats from a vLLM server log |
 | `bench/review.py`, `bench/report.py`, `bench/regrade.py` | Human review in the browser; comparison report; grading again |
-| `bench/sandbox.py`, `bench/agentnet.py`, `bench/gitguard.py`, `bench/egress-proxy.py` | Isolation (see Security model) |
+| `bench/sandbox.py`, `bench/agentnet.py`, `bench/gitguard.py`, `bench/agentgit.py`, `bench/egress-proxy.py` | Isolation (see Security model) |
 | `bench/results/` | Run folders and reports (gitignored) |
 | `examples/python-taskset/` | A small complete task set to try and to copy |
 
@@ -124,7 +124,8 @@ firewall or container level.
 1. **Checks isolation.** The agent network must have no internet and no way to the host's own services; the
    model endpoint must answer through the gateway. The workspace's `.git` must match its baseline (gitguard).
 2. **Resets the workspace** to the task's base tag and runs the task set's after-reset hook in the sandbox
-   (`reset.py`; for example rebuilding generated files). Runs the task's `prepare.sh` if it has one.
+   (`reset.py`; for example rebuilding generated files). Runs the task's `prepare.sh` if it has one. Gives the
+   run its own git folder with only the base tag's history (`agentgit.py`), mounted over `/work/.git`.
 3. **Runs the agent** in the task set's image with the task prompt, as a TUI or, for scripted tasks,
    unattended (follow-up turns from `turns/`).
 4. **Checks `.git` again**, then **grades** the workspace in a throwaway sandbox (`grade.py` with the task's
@@ -385,6 +386,11 @@ The agent can change anything in its workspace, so nothing from the workspace ru
   `.git` hooks, config and tags with a baseline before and after each run, restores it and marks the run
   `git_tampered=1` if something changed. A moved or deleted tag counts (every run starts from one); a new
   tag does not.
+- **The agent's git** is a folder in the run (`agentgit.py`) holding only the task's base tag and its history,
+  mounted over `/work/.git`. The workspace's real `.git` holds every task's base and the task set's own
+  branches; an agent reading it (`git log --all`) could find another task's answer or an earlier run's branches.
+  Whatever the agent commits or branches stays in `<run>/agent-git`. Keep a task's answer out of its base's
+  history: cut a slice before its fix, and put commits that contain fixes (a review task's base) on a side branch.
 
 What is left: the containers share the host kernel (keep it patched), and the model forwarder and proxy see
 whatever the agent sends through them.
