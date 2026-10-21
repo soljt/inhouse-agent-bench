@@ -59,11 +59,11 @@ def model_for(target):
         return env.get('CHATGPT_MODEL', '')
     if target in OPENAI_NAMES:
         return env.get('OPENAI_MODEL') or env.get('DRYRUN_MODEL', '')
-    return env.get('LOCAL_MODEL') or env.get('LOCAL_MODEL', '')
+    return env.get('LOCAL_MODEL', '')
 
 
 def same_target(a, b):
-    """True for the same target; a target and its old name (local, dryrun) count as one."""
+    """True for the same target; openai and its old name dryrun count as one."""
     return a == b or (a in LOCAL_NAMES and b in LOCAL_NAMES) or (a in OPENAI_NAMES and b in OPENAI_NAMES)
 
 
@@ -178,7 +178,7 @@ def main(argv):
         sys.exit('target chatgpt runs Codex only: pass --harness cx')
     model = model_for(a.target)
     if not model:
-        sys.exit(f'no model set for target {a.target} (LOCAL_MODEL/LOCAL_MODEL, OPENAI_MODEL or CHATGPT_MODEL in .env)')
+        sys.exit(f'no model set for target {a.target} (LOCAL_MODEL, OPENAI_MODEL or CHATGPT_MODEL in .env)')
 
     todo, done = plan(tasks, harnesses, a.target, model, ts_root, a.runs)
     variant = os.environ.get('BENCH_VARIANT')

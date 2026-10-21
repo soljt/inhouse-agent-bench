@@ -156,8 +156,8 @@ hooks/, container/  whatever its after-reset hook and image need
 
 - `examples/python-taskset/`: a tiny Python package with two pytest-graded tasks. Start here: its README
   shows how to build it, run it, and check its graders without a model.
-- `~/my-taskset` (private repo): 14 tasks on slices of the app and the app's backend, with their
-  workspace tags, image and setup in its README.
+- Your own task set, kept in its own (possibly private) repo: point `BENCH_TASKSET` at it. Its README
+  describes its workspace tags, image and setup.
 
 ### Prerequisites
 
@@ -217,8 +217,8 @@ never reviewed, and never count as done for `suite.py`.
 bench/load.sh oc local e1-word-count 1 2 4 8     # 1 agent, then 2, 4 and 8 at once (15 runs)
 ```
 
-- Use a short task that is graded fully automatically (T9, T10, T11 in the private task set). Tasks that need
-  the Maven registry (T2) are refused, because the registry has a fixed port.
+- Use a short task that is graded fully automatically. Tasks that need
+  the Maven registry are refused, because the registry has a fixed port.
 - Don't run a suite at the same time: both would compete for the GPUs.
 - Each call makes a new group, `bench/results/load-<time>/` (launcher logs and `report.md`), and its runs are
   ordinary run folders named `...-L<level>w<slot>`, so nothing is overwritten. `bench/report.py` shows every
@@ -351,7 +351,7 @@ test. `report.csv` has one row per run.
 7. If the grader uses test files from outside the task's `hidden/` (another task's hidden tests, a fixture in
    the task set's `lib/`), list them in `GRADER_FILES` (paths relative to the task folder), so the Tests &
    gates tab shows them next to `grade.py` and `hidden/`:
-   `GRADER_FILES = ['../e2-slugify/hidden/SharedFixture.java', '../../lib/java/FakeRepository.java']`.
+   `GRADER_FILES = ['../other-task/hidden/shared_fixture.py', '../../lib/fake_repository.py']`.
    The test results come from the logs of the test checks (`g.junit`, `g.command` with a summary, the task
    set's own): a key `K` with a `K_summary` in `auto.json` and a `K.log` in `grade/`. JUnit (RunTests),
    Jest `--verbose` and pytest output are understood (`bench/lib/testlogs.py`). If a log has another name,
@@ -359,12 +359,12 @@ test. `report.csv` has one row per run.
    `hidden_test_ok`, name its key in `BEHAVIOUR_TEST`.
    Start `grade.py` with a docstring that says in plain words how a run is graded (each gate, what the
    hidden tests check, how each suggestion is computed, what is left to the human): the Tests & gates tab
-   shows the file, and the reviewer reads that before the code. The private tasks have examples.
+   shows the file, and the reviewer reads that before the code. The example task set's tasks have examples.
 8. Optionally add sections to the review page with `review_sections()`, a list of
    `(title, kind, file in grade/[, options])`. Kinds: `md`, `text`, `findings` (one `path:line: text` finding
    per line, shown as a numbered list with the location set apart), `tsv` (tab separated rows; options:
    `columns` for the header, `finding_columns` for cells shown as findings, `ok` and `bad` for values to
-   colour green or red). T12 in the private task set uses all of these.
+   colour green or red).
 9. Check the grader on the reference fix and on the base: `bench/reset.py <tag>`, apply the patch to the
    workspace, `bench/grade.py <id> /tmp/<id>/grade`.
 

@@ -33,7 +33,7 @@ OPENAI_NAMES = ('openai', 'dryrun')
 
 
 def label(s):
-    """A run's row label: harness, target (old names shown as the new: local as local, dryrun as openai),
+    """A run's row label: harness, target (dryrun shown as openai),
     model, variant, yolo."""
     target = 'local' if s['target'] in LOCAL_NAMES else 'openai' if s['target'] in OPENAI_NAMES else s['target']
     parts = [s['harness'] or '?', target or '?', s['model'] or '?', s['variant'], 'yolo' if s['yolo'] else None]
