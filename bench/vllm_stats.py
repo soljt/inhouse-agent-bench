@@ -47,7 +47,7 @@ def in_window(day, clock, since, until):
 
 
 def parse(lines, since, until):
-    """The stats samples within the window, and the startup values (the README's serve command starts a
+    """The stats samples within the window, and the startup values (the serve command in docs/serving-on-runpod.md starts a
     fresh log on every start, so there is one start per log)."""
     samples, startup = [], {}
     for line in lines:
