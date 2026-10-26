@@ -111,7 +111,34 @@ def model_tables(scores):
             if tag:
                 c[tag] += 1
         tags[m] = c
-    return {'models': models, 'tasks': tasks, 'cells': cells, 'dims': dims, 'cost': cost, 'tags': tags}
+    telemetry = {(m, t): task_telemetry(by[m][t]) for m in models for t in tasks if by[m].get(t)}
+    ranks = {(m, t): [(r['rank'], r['rank_n']) for r in by[m][t] if r['rank'] and r['rank_n']]
+             for m in models for t in tasks if by[m].get(t)}
+    return {'models': models, 'tasks': tasks, 'cells': cells, 'dims': dims, 'cost': cost, 'tags': tags,
+            'telemetry': telemetry, 'ranks': ranks}
+
+
+def rank_summary(data):
+    """Per model: how many runs it placed at each rank, and its mean rank as a share of the field (0 best, 1 worst)."""
+    width = max((n for rs in data['ranks'].values() for _, n in rs), default=0)
+    out = {}
+    for m in data['models']:
+        rs = [x for t in data['tasks'] for x in data['ranks'].get((m, t), [])]
+        counts = Counter(r for r, _ in rs)
+        rel = [(r - 1) / (n - 1) for r, n in rs if n > 1]
+        out[m] = {'counts': [counts.get(i, 0) for i in range(1, width + 1)], 'n': len(rs),
+                  'mean_rank': statistics.mean(r for r, _ in rs) if rs else None,
+                  'relative': statistics.mean(rel) if rel else None}
+    return width, out
+
+
+def task_telemetry(rs):
+    """One model's runs of one task: wall minutes, input and peak context tokens, and each run's context per request."""
+    tel = [r['telemetry'] for r in rs if r['telemetry']]
+    return {'wall': [r['wall_min'] for r in rs if r['wall_min'] is not None],
+            'input_k': [x.get('input_tokens', 0) / 1000 for x in tel],
+            'peak_ctx_k': [x.get('peak_context', 0) / 1000 for x in tel],
+            'context_k': [[c / 1000 for c in x['context_per_request']] for x in tel if x.get('context_per_request')]}
 
 
 def aggregate_tps(rs):
@@ -183,6 +210,16 @@ def markdown(scores, data, loads):
     rows = [[m] + [f'{statistics.mean(v):.2f}' if v else '' for v in data['dims'][m].values()]
             + [data['cost'][m]['gates']] for m in models]
     md.append(table(['model'] + DIMENSIONS + ['gates'], rows))
+
+    width, ranked = rank_summary(data)
+    if width:
+        md += ['', '## Ranking', '', 'How often each model\'s runs were ranked 1st, 2nd and so on among the runs of the '
+               'same task (excluded runs keep their place, so a task can lack a rank). Relative: mean of '
+               '(rank - 1) / (runs ranked - 1), 0 is always first, 1 always last.', '']
+        rows = [[m] + r['counts'] + [r['n'], f"{r['mean_rank']:.1f}" if r['mean_rank'] else '',
+                                     f"{r['relative']:.2f}" if r['relative'] is not None else '']
+                for m, r in ranked.items()]
+        md.append(table(['model'] + [f'#{i}' for i in range(1, width + 1)] + ['ranked', 'mean rank', 'relative'], rows))
 
     md += ['', '## Cost and behaviour', '', 'Means per run. Unbacked claims: the final message claims a build or '
            'test result but no build or test command was run.', '']
@@ -265,6 +302,7 @@ def main(argv):
     open(os.path.join(out_dir, 'report.md'), 'w').write('\n'.join(md) + '\n')
     pending = [(s['_dir'], s['pending']) for s in scores if not s['complete']]
     overrides = [(s['_dir'], s['gate_override']) for s in scores if s['gate_override']]
+    data['rank_summary'] = rank_summary(data)
     open(os.path.join(out_dir, 'report.html'), 'w').write(report_html.render(data, loads, pending, len(scores), overrides))
     write_csv(os.path.join(out_dir, 'report.csv'), scores, load_runs)
     print('\n'.join(md))

@@ -16,7 +16,8 @@ EXIT = re.compile(r'Process exited with code (\d+)')
 
 def _empty():
     return dict(harness=None, model_requests=0, input_tokens=0, output_tokens=0, peak_context=0,
-                tool_calls=0, tool_errors=0, nonzero_exits=0, commands=[], final_message='', turn_finals=[], request_seconds=[])
+                tool_calls=0, tool_errors=0, nonzero_exits=0, commands=[], final_message='', turn_finals=[], request_seconds=[],
+                context_per_request=[])
 
 
 def _opencode(db_path):
@@ -30,7 +31,9 @@ def _opencode(db_path):
         t['model_requests'] += 1
         t['input_tokens'] += tok.get('input', 0)
         t['output_tokens'] += tok.get('output', 0) + tok.get('reasoning', 0)
-        t['peak_context'] = max(t['peak_context'], tok.get('input', 0) + (tok.get('cache') or {}).get('read', 0))
+        context = tok.get('input', 0) + (tok.get('cache') or {}).get('read', 0)
+        t['context_per_request'].append(context)
+        t['peak_context'] = max(t['peak_context'], context)
         tm = m.get('time') or {}
         if tm.get('created') and tm.get('completed'):
             t['request_seconds'].append((tm['completed'] - tm['created']) / 1000)
@@ -90,6 +93,7 @@ def _codex(files):
                 t['model_requests'] += 1
                 t['input_tokens'] = total.get('input_tokens', t['input_tokens'])
                 t['output_tokens'] = total.get('output_tokens', t['output_tokens'])
+                t['context_per_request'].append(last.get('input_tokens', 0))
                 t['peak_context'] = max(t['peak_context'], last.get('input_tokens', 0))
             # A model request runs from the last input (turn start, user message, tool output) to the last
             # model output item before the next input; tool execution time is not counted

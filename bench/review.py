@@ -196,7 +196,8 @@ def sections(run_dir, s, blind, with_prompt=True):
         out.append(('Test results', 'tests', tests, {}))
     out.append(('Automatic checks (auto.json)', 'checks', auto_checks(run_dir, s), {}))
     t = s['telemetry']
-    rows = [[k, v] for k, v in t.items() if not (blind and k in ('harness', 'model'))]
+    # Per request series (context_per_request) belong in the report's charts, not in this table
+    rows = [[k, v] for k, v in t.items() if not (blind and k in ('harness', 'model')) and not isinstance(v, list)]
     if t.get('unbacked_claim'):
         rows.append(['WARNING', 'claims verification but ran no build or test command'])
     out.append(('Telemetry', 'table', rows, {}))
