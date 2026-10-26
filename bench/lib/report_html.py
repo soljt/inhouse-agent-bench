@@ -1,7 +1,8 @@
 """The bench report as one self-contained HTML page (no external files), written by bench/report.py.
 
-Totals per task as a colour scale (darker blue = higher total, failed gates marked), the hardest tasks, the
-dimension, cost and failure tag tables, and the load tests as line charts per concurrency level with their
+Totals per task as a colour scale (darker blue = higher total, failed gates marked), the hardest tasks, how often
+each model ranked where, the dimension, cost and failure tag tables, telemetry charts (time, input tokens and peak
+context per task, context per model request), and the load tests as line charts per concurrency level with their
 tables. Hover a cell or a chart point for its details. Light and dark follow the system setting.
 """
 import datetime
@@ -62,6 +63,7 @@ svg text { fill: var(--muted); font-size: 13px; }
 svg .label { fill: var(--ink-2); font-size: 13px; }
 svg .hit { fill: transparent; }
 svg .hit:hover + .dot, svg .dot:hover { r: 6; }
+.sticky-legend { position: sticky; top: 0; z-index: 1; background: var(--page); padding: 6px 0; }
 ul.pending { columns: 2; color: var(--ink-2); }
 code { font-size: 12px; }
 @media (max-width: 700px) { ul.pending { columns: 1; } }
@@ -236,6 +238,172 @@ def line_chart(title, unit, series, xs):
     return f'<div class="card"><h3 style="margin:0 0 4px">{esc(title)}</h3><div class="sub">{esc(unit)}</div>{"".join(parts)}</div>'
 
 
+def ramp_cell(text, share, title=''):
+    """A table cell shaded on the blue ramp by share (0 to 1), blank when share is None."""
+    if share is None:
+        return f'<td class="c" title="{esc(title)}">{esc(text)}</td>'
+    step = min(len(RAMP) - 1, round(share * (len(RAMP) - 1)))
+    ink = '#ffffff' if step >= WHITE_TEXT_FROM else '#0b0b0b'
+    return f'<td class="c" style="background:{RAMP[step]};color:{ink}" title="{esc(title)}"><b>{esc(text)}</b></td>'
+
+
+def ranking_section(data):
+    """How often each model ranked where, and its rank on every task."""
+    width, ranked = data.get('rank_summary') or (0, {})
+    if not width:
+        return ''
+    models, tasks, ranks = data['models'], data['tasks'], data['ranks']
+    head = ''.join(f'<th>#{i}</th>' for i in range(1, width + 1))
+    rows = []
+    for m in models:
+        r = ranked[m]
+        cells = ''.join(ramp_cell(c or '', c / r['n'] if c and r['n'] else None,
+                                  f'{m}: ranked #{i} on {c} of {r["n"]} tasks')
+                        for i, c in enumerate(r['counts'], 1))
+        rel = r['relative']
+        rows.append(f'<tr><td>{esc(m)}</td>{cells}<td>{r["n"]}</td><td>{num(r["mean_rank"])}</td>'
+                    + ramp_cell(num(rel, 2), None if rel is None else 1 - rel, '0 is always first, 1 always last')
+                    + '</tr>')
+    dist = (f'<div class="card"><table class="heat"><tr><th>model</th>{head}<th>ranked</th><th>mean rank</th>'
+            f'<th>relative</th></tr>{"".join(rows)}</table></div>')
+    thead = ''.join(f'<th title="{esc(t)}">{esc(short(t))}</th>' for t in tasks)
+    rows = []
+    for m in models:
+        cells = []
+        for t in tasks:
+            rs = ranks.get((m, t)) or []
+            if not rs:
+                cells.append('<td class="c"></td>')
+                continue
+            text = ', '.join(str(r) for r, _ in rs)
+            share = 1 - statistics.mean((r - 1) / (n - 1) for r, n in rs) if all(n > 1 for _, n in rs) else None
+            cells.append(ramp_cell(text, share, f'{m}, {t}: ' + ', '.join(f'#{r} of {n}' for r, n in rs)))
+        rows.append(f'<tr><td>{esc(m)}</td>{"".join(cells)}</tr>')
+    per_task = f'<div class="card"><table class="heat"><tr><th>model</th>{thead}</tr>{"".join(rows)}</table></div>'
+    return ('<h2 id="ranking">Ranking</h2><p class="note">The reviewer ranks every run of a task against the others.'
+            ' Top: how many tasks each model placed at each rank (darker is a larger share of its tasks), its mean'
+            ' rank, and the relative rank: the mean of (rank - 1) / (runs ranked - 1), so 0 is always first and 1'
+            ' always last, comparable across tasks with different numbers of runs. Excluded runs keep their place,'
+            ' so a rank can be missing.</p>' + dist +
+            '<h3>Rank per task</h3><p class="note">Darker is nearer the top of that task.</p>' + per_task)
+
+
+def model_style(i):
+    """Colour slot and dash pattern of the i-th model: the colours repeat after SERIES models, dashed then."""
+    return i % SERIES + 1, '' if i < SERIES else ' stroke-dasharray="5 3"'
+
+
+def model_legend(models):
+    """The legend of the telemetry charts: one swatch per model row."""
+    items = []
+    for i, m in enumerate(models):
+        slot, dash = model_style(i)
+        swatch = (f'<svg width="22" height="10" style="margin-right:6px;vertical-align:0"><line x1="0" x2="22" y1="5" y2="5"'
+                  f' stroke="var(--s{slot})" stroke-width="4"{dash}/></svg>')
+        items.append(f'<span>{swatch}{esc(m)}</span>')
+    return f'<div class="legend">{"".join(items)}</div>'
+
+
+def bar_chart(title, unit, tasks, models, values, digits=0):
+    """Grouped bars: one group per task, one bar per model with its mean, hover for mean (min-max) and runs."""
+    bar, gap, left, top, bottom, h = 9, 14, 52, 12, 40, 260
+    group = bar * len(models) + gap
+    w = left + group * len(tasks) + 10
+    ys = [mean(v) for v in values.values() if v]
+    ymax = nice_max(max(ys) * 1.05 if ys else 1)
+
+    def py(y):
+        return top + (1 - y / ymax) * (h - top - bottom)
+
+    parts = [f'<svg viewBox="0 0 {w} {h}" width="{w}" role="img" aria-label="{esc(title)}">']
+    for i in range(5):
+        y = ymax * i / 4
+        parts.append(f'<line x1="{left}" x2="{w - 10}" y1="{py(y):.1f}" y2="{py(y):.1f}" '
+                     f'stroke="var({"--axis" if i == 0 else "--grid"})" stroke-width="1"/>'
+                     f'<text x="{left - 6}" y="{py(y) + 4:.1f}" text-anchor="end">{y:g}</text>')
+    for ti, t in enumerate(tasks):
+        x0 = left + ti * group + gap / 2
+        parts.append(f'<text x="{x0 + bar * len(models) / 2:.1f}" y="{h - bottom + 16}" text-anchor="middle">'
+                     f'<title>{esc(t)}</title>{esc(short(t))}</text>')
+        for mi, m in enumerate(models):
+            v = values.get((m, t))
+            if not v:
+                continue
+            y = mean(v)
+            slot, _ = model_style(mi)
+            tip = f'{m}, {t}: {mean_range(v, digits)} over {len(v)} run{"s" if len(v) != 1 else ""}'
+            # Past SERIES models the colours repeat, lighter
+            faded = ' opacity=".55"' if mi >= SERIES else ''
+            parts.append(f'<rect x="{x0 + mi * bar:.1f}" y="{py(y):.1f}" width="{bar - 1}" height="{max(py(0) - py(y), 0.5):.1f}"'
+                         f' fill="var(--s{slot})"{faded}><title>{esc(tip)}</title></rect>')
+    parts.append('</svg>')
+    return (f'<div class="card"><h3 style="margin:0 0 4px">{esc(title)}</h3><div class="sub">{esc(unit)}</div>'
+            f'{model_legend(models)}{"".join(parts)}</div>')
+
+
+def context_chart(task, models, curves):
+    """Context size per model request for one task: one line per run, coloured by model."""
+    w, h, left, right, top, bottom = 520, 220, 52, 16, 12, 38
+    runs = [(mi, m, c) for mi, m in enumerate(models) for c in curves.get((m, task), [])]
+    xmax = max((len(c) for _, _, c in runs), default=1)
+    ymax = nice_max(max((max(c) for _, _, c in runs if c), default=1) * 1.05)
+
+    def px(i):
+        return left + (i / max(xmax - 1, 1)) * (w - left - right)
+
+    def py(y):
+        return top + (1 - y / ymax) * (h - top - bottom)
+
+    parts = [f'<svg viewBox="0 0 {w} {h}" width="100%" role="img" aria-label="context size, {esc(task)}">']
+    for i in range(5):
+        y = ymax * i / 4
+        parts.append(f'<line x1="{left}" x2="{w - right}" y1="{py(y):.1f}" y2="{py(y):.1f}" '
+                     f'stroke="var({"--axis" if i == 0 else "--grid"})" stroke-width="1"/>'
+                     f'<text x="{left - 6}" y="{py(y) + 4:.1f}" text-anchor="end">{y:g}</text>')
+    for x in sorted({1, xmax} | ({round(xmax / 2)} if xmax > 4 else set())):
+        parts.append(f'<text x="{px(x - 1):.1f}" y="{h - bottom + 16}" text-anchor="middle">{x}</text>')
+    parts.append(f'<text x="{(left + w - right) / 2:.1f}" y="{h - 4}" text-anchor="middle">model request</text>')
+    for mi, m, c in runs:
+        slot, dash = model_style(mi)
+        path = ' '.join(f'{"M" if i == 0 else "L"}{px(i):.1f},{py(y):.1f}' for i, y in enumerate(c))
+        tip = f'{m}: {len(c)} requests, peak {max(c):.0f}k, last {c[-1]:.0f}k'
+        parts.append(f'<path d="{path}" fill="none" stroke="var(--s{slot})" stroke-width="1.6" stroke-linejoin="round"'
+                     f'{dash} opacity=".85"><title>{esc(tip)}</title></path>')
+    parts.append('</svg>')
+    return (f'<div class="card"><h3 style="margin:0 0 4px" title="{esc(task)}">{esc(short(task))} '
+            f'<span class="sub">{esc(task)}</span></h3><div class="sub">context tokens (k) per model request,'
+            f' one line per run</div>{"".join(parts)}</div>')
+
+
+def telemetry_section(data):
+    """Charts from the transcripts: wall time, input tokens and peak context per task, and context growth per run."""
+    models, tasks, tel = data['models'], data['tasks'], data.get('telemetry') or {}
+    if not tel:
+        return ''
+
+    def values(key):
+        return {k: v[key] for k, v in tel.items() if v[key]}
+
+    curves = {k: v['context_k'] for k, v in tel.items() if v['context_k']}
+    context = ''.join(context_chart(t, models, curves) for t in tasks if any((m, t) in curves for m in models))
+    return '\n'.join([
+        '<h2 id="telemetry">Telemetry</h2><p class="note">From the agents\' transcripts, all runs in the model tables'
+        ' (failed gates included, excluded runs left out). Bars are the mean per model and task; hover a bar for'
+        ' mean (min-max) and the number of runs. Input tokens count every request\'s prompt, so they grow with'
+        ' both the number of requests and the context size.</p>',
+        bar_chart('Time per task', 'wall minutes per run', tasks, models, values('wall'), 1),
+        bar_chart('Input tokens per task', 'thousand tokens per run, summed over its model requests', tasks, models,
+                  values('input_k')),
+        bar_chart('Peak context per task', 'thousand tokens, the largest prompt of the run', tasks, models,
+                  values('peak_ctx_k')),
+        '<h3>Context during the tasks</h3><p class="note">The prompt size of each model request in order, one line per'
+        ' run. A line that climbs steadily is an agent that keeps reading files into its context; a drop is'
+        ' the harness compacting it.</p>'
+        # The legend stays in view while scrolling through the per task charts
+        + (f'<div class="sticky-legend">{model_legend(models)}</div><div class="charts">{context}</div>' if context else
+                                              '<p class="note">No per request data in these transcripts.</p>')])
+
+
 def load_section(loads):
     """The load tests: charts comparing every group per concurrency level, then each group's table."""
     if not loads:
@@ -299,7 +467,7 @@ def render(data, loads, pending, n_runs, overrides=()):
     now = datetime.datetime.now()
     sections = []
     if data['models']:
-        sections += [totals_section(data), model_sections(data)]
+        sections += [totals_section(data), ranking_section(data), model_sections(data), telemetry_section(data)]
     sections.append(load_section(loads))
     if overrides:
         items = ''.join(f'<li><code>{esc(d)}</code>: {esc(why)}</li>' for d, why in overrides)
