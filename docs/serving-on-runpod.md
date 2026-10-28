@@ -16,7 +16,9 @@ benchmark itself is described in the [README](../README.md).
   | Model | GPUs | Container disk | Host RAM |
   | --- | --- | --- | --- |
   | Qwen3.8-27B FP8 | 1x RTX PRO 6000 | ~80 GB | any |
+  | Qwen3.8-27B BF16 | 1x RTX PRO 6000 | ~100 GB | any |
   | Qwen3.8-Flash-Next FP8 | 2x RTX PRO 6000 (tight) or 4x (comfortable), one machine | ~220 GB | 128 GB or more: its 51 GB lookup table lives in RAM |
+  | Quantization comparison: Flash-Next NVFP4, then 27B BF16 | 1x RTX PRO 6000 | ~250 GB, one model on disk at a time | More than 125 GB (`memory.max`, see below): this checkpoint's lookup table is BF16, 102 GB |
   | GLM-5.3-Flash FP8 | 4x RTX PRO 6000, one machine | ~400 GB | any |
 
 - **No volume.** Everything, weights included, lives on the container disk: downloading straight from
@@ -33,12 +35,13 @@ benchmark itself is described in the [README](../README.md).
 
 ```bash
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
-free -g | head -2
+cat /sys/fs/cgroup/memory.max
 df -h /root
 ```
 
 Expect one line per GPU you ordered, each `NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB`, and RAM
-and disk as in the table above.
+and disk as in the table above. `memory.max` is the pod's RAM limit in bytes. `free -g` shows the whole host's
+RAM instead (1 TB on one 1x RTX PRO 6000 pod whose limit was 125 GB), so it is no guide to what the pod can use.
 
 With several GPUs, also check how they are connected. The model is split across them, and they exchange
 partial results after every layer; RTX PRO 6000s have no NVLink, so that goes over PCIe:
@@ -158,6 +161,21 @@ export HF_XET_HIGH_PERFORMANCE=1
 hf download Qwen/Qwen3.8-27B-FP8 --local-dir /root/models/qwen3.8-27b-fp8
 hf download Qwen/Qwen3.8-Flash-Next-FP8 --local-dir /root/models/qwen3.8-flash-next-fp8   # instead, for Flash-Next
 hf download zai-org/GLM-5.3-Flash --local-dir /root/models/glm-5.3-flash-fp8               # instead, for GLM-5.3-Flash
+
+# Quantization comparison (see below): 1x RTX PRO 6000, one model at a time
+hf download Inferact/Qwen3.8-Flash-Next-NVFP4 --local-dir /root/models/qwen3.8-flash-next-nvfp4
+hf download Qwen/Qwen3.8-27B --local-dir /root/models/qwen3.8-27b-bf16
+```
+
+Several models can share one pod if each is deleted before the next is downloaded. A 250 GB container disk
+then suffices for the quantization comparison: the largest model (Flash-Next NVFP4, 183 GB) plus the venv, the
+CUDA 13 toolkit and the compile caches (about 25 GB), with room to spare. It pays to serve the largest or least
+tested model first, while the pod is fresh and any troubleshooting doesn't hold up the rest.
+
+```bash
+rm -rf /root/models/qwen3.8-flash-next-nvfp4    # a model that is no longer needed
+rm -rf /root/.cache/huggingface/xet             # the download cache, if present
+df -h /root
 ```
 
 Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took about 3 min, peaking around
@@ -166,8 +184,10 @@ Expect a few minutes even for big models: Qwen3.8-Flash-Next FP8 (186 GB) took a
 | Model | Repo | Size | Serving |
 | --- | --- | --- | --- |
 | Qwen3.8-27B FP8 | `Qwen/Qwen3.8-27B-FP8` | 31 GB | 1x RTX PRO 6000, below |
+| Qwen3.8-27B BF16 | `Qwen/Qwen3.8-27B` | 56 GB | 1x RTX PRO 6000, below |
 | Qwen3.8-27B NVFP4 | `nvidia/Qwen3.8-27B-NVFP4` | 22 GB | 1x RTX PRO 6000 (untested) |
-| Qwen3.8-Flash-Next FP8 | `Qwen/Qwen3.8-Flash-Next-FP8` | 186 GB | 2 or 4x RTX PRO 6000, below (untested) |
+| Qwen3.8-Flash-Next FP8 | `Qwen/Qwen3.8-Flash-Next-FP8` | 186 GB | 2 or 4x RTX PRO 6000, below |
+| Qwen3.8-Flash-Next NVFP4 | `Inferact/Qwen3.8-Flash-Next-NVFP4` | 183 GB, of which 80 GB go on the GPU | 1x RTX PRO 6000, below |
 | GLM-5.3-Flash FP8 | `zai-org/GLM-5.3-Flash` | 328 GB | 4x RTX PRO 6000, below |
 | GLM-5.3-Flash NVFP4 | `RedHatAI/GLM-5.3-Flash-NVFP4` | ~200 GB | 4x RTX PRO 6000, fallback if FP8 doesn't fit |
 
@@ -220,9 +240,10 @@ FlashInfer, about 5 min from start to ready (loading from the old volume; local 
   ~524k tokens) and max concurrency at 131k (want >= 4x).
 - During agent runs, `Prefix cache hit rate` in the log should climb on later turns.
 
-## Serve: Qwen3.8-Flash-Next on 2 or 4 GPUs (untested on RTX PRO 6000)
+## Serve: Qwen3.8-Flash-Next on 2 or 4 GPUs
 
-Set `LOCAL_MODEL=qwen3.8-flash-next` in `.env` first. On a 4-GPU pod use `--tensor-parallel-size 4`.
+The Flash-Next FP8 runs used the command below. Set `LOCAL_MODEL=qwen3.8-flash-next` in `.env` first. On a
+4-GPU pod use `--tensor-parallel-size 4`.
 
 ```bash
 vllm serve /root/models/qwen3.8-flash-next-fp8 \
@@ -254,7 +275,7 @@ Why these settings, from the recipe:
   `--speculative-config '{"method":"mtp","num_speculative_tokens":3}'`, which costs memory, and give those
   runs `BENCH_VARIANT=mtp3`.
 
-Expect (estimates, nobody has run this here yet):
+Expect (estimates written before the first serve; no startup report from it was saved in `results/`):
 
 - The startup log lists 2 (or 4) workers, one per GPU, and loads 186 GB from local disk.
 - Weights take about 63 GiB per GPU at TP2 or 32 GiB at TP4 (134 GB without the lookup table, split evenly).
@@ -262,6 +283,118 @@ Expect (estimates, nobody has run this here yet):
   131k tokens need about 7 GB of KV cache in total (12 of 48 layers keep one, ~14 KB per token at FP8).
 - Maximum concurrency at 131,072 tokens should be 4x or more.
 - Several minutes from start to ready.
+
+## Quantization comparison on 1 GPU
+
+A model often has to fit hardware with less memory than the setup it was benchmarked on. Flash-Next at FP8, for
+example, needs about 134 GB of GPU memory, just over what 4x RTX 5090 (128 GB) offers. Before choosing a
+quantized model for that hardware, it is worth measuring what quantization costs on your own tasks. For
+Flash-Next, 4-bit weights can be compared with its FP8 runs. A dense model of a size that fits without heroics
+makes a useful reference at more than one precision: Qwen3.8-27B at BF16 against its FP8 runs.
+
+All of these fit on one RTX PRO 6000. It is the same Blackwell generation (sm_120) as the RTX 5090, and with the
+same weights and kernels, quality results carry over between the two. Speed and memory headroom do not (one GPU
+here, several over PCIe there), so measure throughput on the hardware you will actually serve from.
+
+Give the comparison runs the same `--served-model-name` (and `LOCAL_MODEL`) as the model's existing runs and
+tell them apart with `BENCH_VARIANT`. The report then shows each variant in its own row next to the original:
+
+| Runs | `LOCAL_MODEL` | `BENCH_VARIANT` |
+| --- | --- | --- |
+| Flash-Next NVFP4 | `qwen3.8-flash-next` | `nvfp4` |
+| 27B BF16 | `qwen3.8-27b` | `bf16` |
+
+For a clean comparison, change only the weights. Keep everything else as in the FP8 serve commands above: the
+vLLM version (0.30.0), context length, parsers and KV cache type, with MTP off. Settings that only affect memory
+use (`--gpu-memory-utilization`, `--max-num-seqs`) leave the answers unchanged.
+
+### Qwen3.8-Flash-Next NVFP4 on 1 GPU
+
+Served 2026-10-27 on 1x RTX PRO 6000 with vLLM 0.30.0, with the command below, for a full suite (28 runs).
+Startup report: `results/2026-10-27_qwen3.8-flash-next-nvfp4_1x-rtx-pro-6000.md`.
+
+`Inferact/Qwen3.8-Flash-Next-NVFP4` comes from the company behind vLLM and loads in vLLM. Only the routed experts
+are quantized: NVFP4 weights and activations, ModelOpt format (68 GB). Everything else stays BF16 (attention,
+shared experts, routers, embeddings, vision, MTP: about 12 GB), so the experts are the only part with lower
+precision than the FP8 model. The n-gram lookup table (shard 1, 102 GB) is also BF16, twice the size of the FP8
+model's, and it lives in host RAM. Loading it failed on a 1x RTX PRO 6000 pod limited to 125 GB
+(`/sys/fs/cgroup/memory.max`) and worked on one with 250 GB, so check that limit before downloading.
+
+`RadixArk/Qwen3.8-Flash-Next-NVFP4` is quantized the same way and keeps the table at FP8 (135 GB in total).
+However, its model card lists only SGLang and describes it as a private candidate. The card also notes that
+"long agentic generations tend to run longer than BF16". This applies to 4-bit Flash-Next generally, so compare
+wall time and context per request against the FP8 runs, not just the scores.
+
+```bash
+vllm serve /root/models/qwen3.8-flash-next-nvfp4 \
+  --served-model-name qwen3.8-flash-next \
+  --host 127.0.0.1 --port 8000 \
+  --tensor-parallel-size 1 \
+  --max-model-len 131072 \
+  --max-num-seqs 16 \
+  --gpu-memory-utilization 0.95 \
+  --attention-config.indexer_kv_dtype fp8 \
+  --limit-mm-per-prompt '{"image":0,"video":0}' \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
+  --api-key "$VLLM_KEY" \
+  2>&1 | tee /root/vllm.log
+```
+
+Changes from the FP8 command:
+
+- **`--tensor-parallel-size 1`, no `--enable-expert-parallel`:** there is only one GPU. vLLM reads the
+  quantization from the checkpoint's config, so `--quantization` isn't needed.
+- **`--max-num-seqs 16` instead of 256:** each sequence slot reserves its linear attention (Gated DeltaNet)
+  state, 36 layers of it. 256 slots fit across 2 or 4 GPUs, but on one they would take a large share of the
+  memory left for the KV cache. A suite runs one agent at a time, so 16 slots leave plenty of headroom.
+- **`--gpu-memory-utilization 0.95`:** the weights take most of the card.
+
+Expect, from the first serve:
+
+- NVFP4 MoE backend `FLASHINFER_CUTLASS`, and `Resolved Engram configuration: EngramConfig(cpu_offload=True, ...)`:
+  the lookup table stays in host RAM without any flag.
+- `Model loading took 73.53 GiB` (weights read in about 100 s from the container disk), then about 5.5 min of
+  profiling, compiling and warm-up: about 8 min from start to ready.
+- KV cache 14.39 GiB, `GPU KV cache size: 555,294 tokens`, `Maximum concurrency for 131,072 tokens per request:
+  4.24x`. That is about 27 KB per token: the main KV cache stays BF16, as in the FP8 command, with the indexer key
+  in FP8. Plenty for a suite (1x), just enough for a 4-agent load test.
+- With one agent: about 75 generated tokens per second, prefix cache hit rate about 95%, KV cache use at most 18%.
+- A few `Triton kernel JIT compilation during inference` warnings during the first runs: one-off latency spikes,
+  harmless.
+
+### Qwen3.8-27B BF16 on 1 GPU
+
+The FP8 serve command with the BF16 weights and one addition, `--max-num-seqs 256`. `--kv-cache-dtype fp8` stays,
+so the weights are the only difference from the FP8 runs:
+
+```bash
+vllm serve /root/models/qwen3.8-27b-bf16 \
+  --served-model-name qwen3.8-27b \
+  --host 127.0.0.1 --port 8000 \
+  --tensor-parallel-size 1 \
+  --max-model-len 131072 \
+  --max-num-seqs 256 \
+  --gpu-memory-utilization 0.92 \
+  --kv-cache-dtype fp8 \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice --tool-call-parser qwen3_xml \
+  --api-key "$VLLM_KEY" \
+  2>&1 | tee /root/vllm.log
+```
+
+Without `--max-num-seqs`, startup fails with `max_num_seqs (1024) exceeds available Mamba cache blocks (661)`. The
+27B is a hybrid model too: every sequence slot (vLLM's default is 1024) needs a block for its linear attention
+state, and with the BF16 weights there is only room for 661. The FP8 serve had enough memory for the default.
+The limit only caps how many requests run at once, so the answers don't change.
+
+Expect, from the first serve (2026-10-27, vLLM 0.30.0, `results/2026-10-27_qwen3.8-27b-bf16_1x-rtx-pro-6000.md`):
+`Model loading took 51.1 GiB` (weights read in 4 s, likely from the page cache right after the download), about
+2 min from start to ready, KV cache 32.11 GiB, `GPU KV cache size: 975,758 tokens`, `Maximum concurrency for
+131,072 tokens per request: 7.44x`. With one agent it generates about 24 tokens per
+second, much slower than Flash-Next NVFP4 (about 75) on the same card: a dense model reads all 27B BF16 weights
+for every token, Flash-Next only its few active experts. Plan for a full suite taking well over the FP8 runs'
+6 hours.
 
 ## Serve: GLM-5.3-Flash on 4 GPUs
 
@@ -344,7 +477,21 @@ the container disk (`Loading weights took`), and `GPU KV cache size: 909,560 tok
   then `--enforce-eager` (no CUDA graphs: slower, but avoids graph capture), then a nightly vLLM build.
 - **Flash-Next: out of memory while loading:** check the offload is on (add `--engram-config
   '{"cpu_offload":true}'`), lower `--max-model-len`, or use 4 GPUs.
-- **Flash-Next: cache capacity error at startup:** keep `--max-num-seqs 256`.
+- **Qwen hybrid models (27B, Flash-Next): `max_num_seqs (1024) exceeds available Mamba cache blocks (N)` at
+  startup:** each sequence slot needs a block for its linear attention state, and vLLM's default of 1024 slots
+  doesn't fit. Set `--max-num-seqs` below N (256 is the usual choice, 16 on a tight single GPU). This leaves the
+  answers unchanged.
+- **Flash-Next NVFP4: out of memory at startup, or maximum concurrency below 1x:** lowering
+  `--max-num-batched-tokens` to 4096 shrinks activations without changing answers. Adding `--kv-cache-dtype fp8`
+  frees more memory but changes answers slightly, so those runs need their own label
+  (`BENCH_VARIANT=nvfp4-kvfp8`).
+- **Flash-Next NVFP4: `Engine core initialization failed ... Failed core proc(s): {}` while loading weights,
+  with no error from the engine itself:** the pod's RAM limit killed the engine. `memory.peak` equal to
+  `memory.max` (both in `/sys/fs/cgroup/`) confirms it; `dmesg` usually shows nothing inside the container. The
+  BF16 lookup table needs 102 GB plus headroom, more than the 125 GB a 1x RTX PRO 6000 pod gets.
+- **NVFP4: `no kernel image is available`, or an error in an FP4 GEMM or MoE kernel:** the pinned vLLM may lack
+  an sm_120 FP4 kernel for this model. A newer vLLM usually helps (with a `BENCH_VARIANT` naming it, since the
+  engine version changed), and `--enforce-eager` is the fallback after that.
 - **Several GPUs: startup hangs, every GPU at 100% use but low power (about 100 of 600 W):** the GPUs are
   waiting for each other, not computing. The hang can come right after `vLLM is using nccl` (NCCL connecting)
   or later, at the first forward passes (vLLM's own all-reduce, `CUSTOM` in the `all-reduce backends` log
@@ -370,4 +517,7 @@ Sources: Qwen3.8-27B [model card](https://huggingface.co/Qwen/Qwen3.8-27B) and
 [vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-Flash-Next) (as of 2026-10-13); GLM-5.3-Flash
 [vLLM recipe](https://recipes.vllm.ai/zai-org/GLM-5.3-Flash),
 [4x RTX PRO 6000 benchmark](https://github.com/commdata2338/glm-5.3-flash-4x-rtx-pro-6000-benchmark) and
-[NVFP4 model card](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) (as of 2026-10-14).
+[NVFP4 model card](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) (as of 2026-10-14); Flash-Next NVFP4
+model cards and file listings from [Inferact](https://huggingface.co/Inferact/Qwen3.8-Flash-Next-NVFP4) and
+[RadixArk](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4), and the 27B
+[BF16 model](https://huggingface.co/Qwen/Qwen3.8-27B) (as of 2026-10-27).
