@@ -33,8 +33,9 @@ flowchart LR
   ranks them.
 - **Load tests.** Run 1, 2, 4, 8 agents at once against the same server and see time per request, tokens per
   second per agent and aggregate throughput, with vLLM's own stats for the same window.
-- **Serving recipes.** [Serving the model on RunPod](docs/serving-on-runpod.md) covers Qwen3.8-27B and
-  GLM-5.3-Flash on RTX PRO 6000s, with measured [server reports](results/).
+- **Serving recipes.** [Serving the model on RunPod](docs/serving-on-runpod.md) covers Qwen3.8-27B,
+  Qwen3.8-Flash-Next (FP8, and NVFP4 on a single GPU) and GLM-5.3-Flash on RTX PRO 6000s, with measured
+  [server reports](results/).
 
 ## Quickstart
 
